@@ -700,13 +700,22 @@ async function runOcr(dataUrl){
   }
 }
 
+// 반품번호: 같은 줄에서만 값을 찾음 (전체 텍스트 60자 윈도우 방식은 다른 행의 숫자를 잘못 집어올 수 있어서 폐기)
+// 밑줄·하이픈 섞인 형식(20260811_1)을 순수 숫자(0042933059)보다 먼저 시도 (더 구체적인 패턴 우선)
 function extractDigitsNear(text, label, minLen, maxLen){
   if(!text) return '';
-  const labelIdx = text.indexOf(label);
-  if(labelIdx !== -1){
-    const window = text.slice(labelIdx, labelIdx + 60);
-    const m = window.match(new RegExp(`\\d{${minLen},${maxLen}}`));
-    if(m) return m[0];
+  const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  if(label){
+    for(const line of lines){
+      const idx = line.indexOf(label);
+      if(idx === -1) continue;
+      const rest = line.slice(idx + label.length).replace(/^[\s:：]+/, '');
+      let m = rest.match(/\d[\d_\-]{3,18}\d/);
+      if(m) return m[0];
+      m = rest.match(new RegExp(`\\d{${minLen},${maxLen}}`));
+      if(m) return m[0];
+    }
+    return '';
   }
   const all = [...text.matchAll(new RegExp(`\\d{${minLen},${maxLen}}`, 'g'))].map(m=>m[0]);
   if(all.length === 0) return '';
@@ -1035,11 +1044,13 @@ function renderWizardStep1(modal){
       document.getElementById('wz1NextBtn').disabled = false;
       const resultEl1 = document.getElementById('wzReceiptResultMsg');
       resultEl1.style.display = 'block';
-      if(wz.returnNumber){
-        resultEl1.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--green); background:var(--green-bg); padding:8px 10px; border-radius:8px; margin-top:8px;">✅ 반품번호 ${escapeHtml(wz.returnNumber)} 인식됐어요${hospGuess1 ? ' · 반품처도 인식됐어요' : ''} (2단계에서 확인)</div>`;
-      } else {
-        resultEl1.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--ink-muted); background:#F1F3F5; padding:8px 10px; border-radius:8px; margin-top:8px;">ℹ️ 전체샷이라 자동인식은 안 될 수 있어요 (정상) - 다음 단계 확대촬영에서 다시 인식할게요</div>`;
-      }
+      const numLine1 = wz.returnNumber
+        ? `<span style="color:var(--green);">✅ 반품번호: ${escapeHtml(wz.returnNumber)} 인식됨</span>`
+        : `<span style="color:var(--ink-muted);">➖ 반품번호: 인식 안 됨 (전체샷이라 정상 - 다음 단계 확대촬영에서 재시도)</span>`;
+      const hospLine1 = hospGuess1
+        ? `<span style="color:var(--green);">✅ 반품처: ${escapeHtml(hospGuess1)} 인식됨</span>`
+        : `<span style="color:var(--ink-muted);">➖ 반품처: 인식 안 됨 (전체샷이라 정상 - 다음 단계 확대촬영에서 재시도)</span>`;
+      resultEl1.innerHTML = `<div style="font-size:12.5px; font-weight:600; background:#F1F3F5; padding:8px 10px; border-radius:8px; margin-top:8px; line-height:1.8;">${numLine1}<br>${hospLine1}<br><span style="color:var(--ink-muted); font-weight:500;">👉 2단계에서 다시 한번 확인·확대촬영해주세요</span></div>`;
     };
     reader.readAsDataURL(file);
   });
@@ -1090,41 +1101,42 @@ function renderWizardStep2(modal){
       document.getElementById('wzZoomProgress').textContent = '🔄 반품번호·반품처 인식 중... (몇 초 걸려요)';
       const text = await runOcr(wz.zoomImage);
       wz.zoomRawText = text;
-      const foundNumber = extractDigitsNear(text, '반품번호', 6, 14) || extractDigitsNear(text, '', 6, 14);
+      const foundNumber = extractDigitsNear(text, '반품번호', 6, 14);
+      const foundHospital = extractHospitalGuess(text);
       document.getElementById('wzZoomProgressWrap').style.display = 'none';
 
-      let msgParts = [];
-      let warnParts = [];
+      // 반품번호 상태 판정
+      let numLine;
       if(foundNumber){
         const cur = document.getElementById('wz_returnNumber').value.trim();
         if(cur && cur !== foundNumber){
-          warnParts.push(`반품번호가 기존 값과 달라요 (인식값: ${foundNumber})`);
+          numLine = `<span style="color:var(--amber);">⚠️ 반품번호: 인식값(${escapeHtml(foundNumber)})이 기존 값과 달라요 - 확인해주세요</span>`;
         } else {
           document.getElementById('wz_returnNumber').value = foundNumber;
-          msgParts.push(`반품번호 ${foundNumber}`);
+          numLine = `<span style="color:var(--green);">✅ 반품번호: ${escapeHtml(foundNumber)} 인식됨</span>`;
         }
+      } else {
+        numLine = `<span style="color:var(--danger);">❌ 반품번호: 인식 안 됨 - 직접 입력해주세요</span>`;
       }
 
-      // 반품처(병원명)도 확대샷 텍스트에서 재시도 - "반품처"/"병원명" 라벨과 같은 줄의 오른쪽 값을 통째로 가져옴
-      const foundHospital = extractHospitalGuess(text);
+      // 반품처 상태 판정 - "반품처"/"병원명" 라벨과 같은 줄의 오른쪽 값을 통째로 가져옴
+      let hospLine;
       if(foundHospital){
         const curHosp = document.getElementById('wz_hospitalName').value.trim();
         if(!curHosp){
           document.getElementById('wz_hospitalName').value = foundHospital;
-          msgParts.push(`반품처 ${foundHospital}`);
+          hospLine = `<span style="color:var(--green);">✅ 반품처: ${escapeHtml(foundHospital)} 인식됨</span>`;
         } else if(curHosp !== foundHospital){
-          warnParts.push(`반품처가 기존 값과 달라요 (인식값: ${foundHospital})`);
+          hospLine = `<span style="color:var(--amber);">⚠️ 반품처: 인식값(${escapeHtml(foundHospital)})이 기존 값과 달라요 - 확인해주세요</span>`;
+        } else {
+          hospLine = `<span style="color:var(--green);">✅ 반품처: ${escapeHtml(foundHospital)} (기존 값과 동일)</span>`;
         }
+      } else {
+        hospLine = `<span style="color:var(--danger);">❌ 반품처: 인식 안 됨 - 직접 입력해주세요</span>`;
       }
 
       resultEl.style.display = 'block';
-      if(msgParts.length > 0 && warnParts.length === 0){
-        resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--green); background:var(--green-bg); padding:8px 10px; border-radius:8px; margin-top:8px;">✅ 자동 인식 완료: ${escapeHtml(msgParts.join(' · '))}</div>`;
-      } else if(warnParts.length > 0){
-        resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--amber); background:var(--amber-bg); padding:8px 10px; border-radius:8px; margin-top:8px;">⚠️ ${escapeHtml(warnParts.join(' · '))} - 확인해주세요${msgParts.length ? '<br>✅ ' + escapeHtml(msgParts.join(' · ')) : ''}</div>`;
-      } else {
-        resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--danger); background:#FBEAE8; padding:8px 10px; border-radius:8px; margin-top:8px;">⚠️ 자동 인식이 안 됐어요 - 위 입력칸에 직접 입력해주세요</div>`;
-      }
+      resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; background:#F1F3F5; padding:8px 10px; border-radius:8px; margin-top:8px; line-height:1.8;">${numLine}<br>${hospLine}</div>`;
     };
     reader.readAsDataURL(file);
   });
