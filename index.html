@@ -508,7 +508,6 @@ async function openDetail(id){
   overlay.innerHTML = `<div class="modal">
     <h2>${escapeHtml(rec.returnNumber || '반품 상세')}</h2>
     <div class="field"><label>병원명</label><input type="text" value="${escapeHtml(rec.hospitalName||'-')}" disabled></div>
-    <div class="field"><label>반품요청일</label><input type="text" value="${escapeHtml(rec.returnRequestDate||'-')}" disabled></div>
     <div class="loading" id="detailPhotoLoading">사진 불러오는 중...</div>
     <div id="detailBody" style="display:none;"></div>
     <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('detailOverlay')">닫기</button></div>
@@ -956,7 +955,7 @@ function resetWizardState(){
   wz = {
     step: 1,
     receiptImage: null, receiptRawText: '',
-    returnNumber: '', hospitalName: '', returnRequestDate: '',
+    returnNumber: '', hospitalName: '',
     zoomImage: null, zoomRawText: '',
     items: [],   // 확정된 품목: {id, productCode, productName, lot, expiryDate, quantity, status, photos:[{data, rawText}]}
     draft: { productCode:'', productName:'', lot:'', expiryDate:'', quantity:'', status:'A', photos:[], gtinLast6:'', masterMatched:false, masterOriginalCode:'' }, // 입력 중인 품목
@@ -1030,7 +1029,6 @@ function renderWizardStep1(modal){
       const text = await runOcr(wz.receiptImage);
       wz.receiptRawText = text;
       wz.returnNumber = extractDigitsNear(text, '반품번호', 6, 14);
-      wz.returnRequestDate = extractDateNear(text);
       const hospGuess1 = extractHospitalGuess(text);
       if(hospGuess1) wz.hospitalName = hospGuess1;
       document.getElementById('wzReceiptProgressWrap').style.display = 'none';
@@ -1061,7 +1059,6 @@ function renderWizardStep2(modal){
     <div class="hint" style="margin-bottom:10px;">1번에서 인식된 정보를 확인·수정해주세요. 아래에서 반품번호·반품처 부분만 확대 촬영하면 인식 정확도가 크게 올라가요 (선택이지만 강력 추천).</div>
     <div class="field"><label>반품번호 *</label><input id="wz_returnNumber" type="text" value="${escapeHtml(wz.returnNumber)}" placeholder="예: 0042933059"></div>
     <div class="field"><label>병원명 / 반품처</label><input id="wz_hospitalName" type="text" value="${escapeHtml(wz.hospitalName)}"></div>
-    <div class="field"><label>반품요청일</label><input id="wz_returnRequestDate" type="text" value="${escapeHtml(wz.returnRequestDate)}" placeholder="예: 2026.08.18"></div>
 
     <div class="hint" style="margin:14px 0 6px;">📷 반품번호 · 반품처 부분 확대 촬영 (선택 · 정확도 향상용)</div>
     <div class="capture-zone" id="wzZoomZone">
@@ -1135,7 +1132,6 @@ function renderWizardStep2(modal){
   document.getElementById('wz2NextBtn').addEventListener('click', ()=>{
     wz.returnNumber = document.getElementById('wz_returnNumber').value.trim();
     wz.hospitalName = document.getElementById('wz_hospitalName').value.trim();
-    wz.returnRequestDate = document.getElementById('wz_returnRequestDate').value.trim();
     if(!wz.returnNumber){ document.getElementById('wz2_err').style.display = 'block'; return; }
     wz.step = 3;
     renderWizardStep();
@@ -1440,7 +1436,7 @@ async function submitWizard(){
   const totalPhotos = 1 + (wz.zoomImage ? 1 : 0) + itemPhotoTotal;
 
   const rec = {
-    id, returnNumber: wz.returnNumber, hospitalName: wz.hospitalName, returnRequestDate: wz.returnRequestDate,
+    id, returnNumber: wz.returnNumber, hospitalName: wz.hospitalName,
     memo,
     items: wz.items.map(it => ({ id: it.id, productCode: it.productCode, productName: it.productName, lot: it.lot, expiryDate: it.expiryDate, quantity: it.quantity, status: it.status || 'A' })),
     status: 'pending', registeredBy: by, registeredAt: now,
@@ -1483,7 +1479,7 @@ function exportToExcel(){
     const its = itemsOf(r);
     const base = {
       '반품번호': r.returnNumber || '', '상태': STATUS_LABEL[r.status] || r.status,
-      '병원명': r.hospitalName || '', '반품요청일': r.returnRequestDate || '',
+      '병원명': r.hospitalName || '',
       '등록자': r.registeredBy || '', '등록일시': r.registeredAt ? fmtDate(r.registeredAt) : '',
       '검수자': r.confirmedBy || '', '검수일시': r.confirmedAt ? fmtDate(r.confirmedAt) : '', '메모': r.memo || ''
     };
