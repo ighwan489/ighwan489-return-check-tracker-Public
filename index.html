@@ -518,7 +518,7 @@ async function openDetail(id){
   body.style.display = 'block';
 
   const receiptPhotos = photos.filter(p => p.type === 'receipt' || p.type === 'zoom');
-  const TYPE_LABEL = { receipt:'📄 인수증 원본', zoom:'🔍 반품번호 확대' };
+  const TYPE_LABEL = { receipt:'📄 인수증 원본', zoom:'🔍 반품번호·반품처 확대' };
 
   let html = '';
   if(receiptPhotos.length > 0){
@@ -847,7 +847,7 @@ function renderWizardStep1(modal){
   modal.innerHTML = `
     <h2>새 반품 등록</h2>
     ${wizardStepsBarHtml()}
-    <div class="hint" style="margin-bottom:10px;">반품인수증 전체가 잘 보이게 한 장 촬영해주세요. (증빙 보존을 위해 전체 문서를 촬영해주세요)</div>
+    <div class="hint" style="margin-bottom:10px;">반품인수증 전체가 잘 보이게 한 장 촬영해주세요. (증빙 보존을 위해 전체 문서를 촬영해주세요)<br>💡 이 사진은 원본 보존(인수서명본)용이라 글씨가 작아져도 괜찮아요 - 자동인식이 안 돼도 정상이에요. 실제 인식은 다음 단계에서 반품번호·반품처 부분만 확대 촬영해서 처리해요.</div>
     <div class="capture-zone" id="wzReceiptZone">
       📷 눌러서 촬영 또는 사진 선택
       <input type="file" id="wzReceiptInput" accept="image/*" capture="environment">
@@ -883,7 +883,7 @@ function renderWizardStep1(modal){
       }
       document.getElementById('wzReceiptProgressWrap').style.display = 'none';
       document.getElementById('wz1NextBtn').disabled = false;
-      showToast(wz.returnNumber ? `반품번호 ${wz.returnNumber} 인식됐어요` : '자동 인식이 어려웠어요 - 다음 단계에서 직접 입력해주세요');
+      showToast(wz.returnNumber ? `반품번호 ${wz.returnNumber} 인식됐어요` : '전체샷이라 자동인식은 안 될 수 있어요 (정상) - 다음 단계 확대촬영에서 다시 인식할게요');
     };
     reader.readAsDataURL(file);
   });
@@ -900,15 +900,15 @@ function renderWizardStep2(modal){
   modal.innerHTML = `
     <h2>새 반품 등록</h2>
     ${wizardStepsBarHtml()}
-    <div class="hint" style="margin-bottom:10px;">1번에서 인식된 정보를 확인·수정해주세요. 반품번호가 잘 안 읽혔다면 확대 촬영을 추가하면 정확도가 올라가요 (선택).</div>
+    <div class="hint" style="margin-bottom:10px;">1번에서 인식된 정보를 확인·수정해주세요. 아래에서 반품번호·반품처 부분만 확대 촬영하면 인식 정확도가 크게 올라가요 (선택이지만 강력 추천).</div>
     <div class="field"><label>반품번호 *</label><input id="wz_returnNumber" type="text" value="${escapeHtml(wz.returnNumber)}" placeholder="예: 0042933059"></div>
     <div class="field"><label>병원명 / 반품처</label><input id="wz_hospitalName" type="text" value="${escapeHtml(wz.hospitalName)}"></div>
     <div class="field"><label>반품요청일</label><input id="wz_returnRequestDate" type="text" value="${escapeHtml(wz.returnRequestDate)}" placeholder="예: 2026.08.18"></div>
     <div class="field"><label>사업자번호</label><input id="wz_businessNumber" type="text" value="${escapeHtml(wz.businessNumber)}"></div>
 
-    <div class="hint" style="margin:14px 0 6px;">📷 반품번호 확대 촬영 (선택 · 정확도 향상용)</div>
+    <div class="hint" style="margin:14px 0 6px;">📷 반품번호 · 반품처 부분 확대 촬영 (선택 · 정확도 향상용)</div>
     <div class="capture-zone" id="wzZoomZone">
-      📷 눌러서 확대 촬영 또는 건너뛰기
+      📷 눌러서 반품번호·반품처 부분 확대 촬영 또는 건너뛰기
       <input type="file" id="wzZoomInput" accept="image/*" capture="environment">
     </div>
     <div id="wzZoomProgressWrap" style="display:none;"><div class="ocr-progress" id="wzZoomProgress">분석 중...</div></div>
@@ -928,22 +928,52 @@ function renderWizardStep2(modal){
     const reader = new FileReader();
     reader.onload = async (e)=>{
       wz.zoomImage = e.target.result;
-      zone.innerHTML = `<img src="${wz.zoomImage}" alt="반품번호 확대"><input type="file" id="wzZoomInput" accept="image/*" capture="environment" style="display:none;">`;
+      zone.innerHTML = `<img src="${wz.zoomImage}" alt="반품번호·반품처 확대"><input type="file" id="wzZoomInput" accept="image/*" capture="environment" style="display:none;">`;
       document.getElementById('wzZoomProgressWrap').style.display = 'block';
-      document.getElementById('wzZoomProgress').textContent = '숫자 인식 중...';
+      document.getElementById('wzZoomProgress').textContent = '반품번호·반품처 인식 중...';
       const text = await runOcr(wz.zoomImage);
       wz.zoomRawText = text;
-      const found = extractDigitsNear(text, '반품번호', 6, 14) || extractDigitsNear(text, '', 6, 14);
+      const foundNumber = extractDigitsNear(text, '반품번호', 6, 14) || extractDigitsNear(text, '', 6, 14);
       document.getElementById('wzZoomProgressWrap').style.display = 'none';
-      if(found){
+
+      let msgParts = [];
+      if(foundNumber){
         const cur = document.getElementById('wz_returnNumber').value.trim();
-        if(cur && cur !== found){
-          showToast(`⚠️ 확대촬영 인식값(${found})이 기존 값과 달라요 - 확인해주세요`);
+        if(cur && cur !== foundNumber){
+          showToast(`⚠️ 확대촬영 인식값(${foundNumber})이 기존 값과 달라요 - 확인해주세요`);
         } else {
-          document.getElementById('wz_returnNumber').value = found;
-          showToast(`반품번호 ${found} 확인됐어요`);
+          document.getElementById('wz_returnNumber').value = foundNumber;
+          msgParts.push(`반품번호 ${foundNumber}`);
         }
-      } else {
+      }
+
+      // 반품처(병원명)도 확대샷 텍스트에서 재시도 - "반품처" 라벨 우선, 없으면 "병원명" 라벨로 재시도
+      let foundHospital = '';
+      const rIdx = text.indexOf('반품처');
+      if(rIdx !== -1){
+        const seg = text.slice(rIdx, rIdx + 80).replace('반품처', '').trim();
+        foundHospital = seg.split('\n')[0].slice(0, 40).trim();
+      }
+      if(!foundHospital){
+        const hIdx2 = text.indexOf('병원명');
+        if(hIdx2 !== -1){
+          const seg2 = text.slice(hIdx2, hIdx2 + 80).replace('병원명', '').trim();
+          foundHospital = seg2.split('\n')[0].slice(0, 40).trim();
+        }
+      }
+      if(foundHospital){
+        const curHosp = document.getElementById('wz_hospitalName').value.trim();
+        if(!curHosp){
+          document.getElementById('wz_hospitalName').value = foundHospital;
+          msgParts.push(`반품처 ${foundHospital}`);
+        } else if(curHosp !== foundHospital){
+          showToast(`⚠️ 확대촬영 반품처 인식값(${foundHospital})이 기존 값과 달라요 - 확인해주세요`);
+        }
+      }
+
+      if(msgParts.length > 0){
+        showToast(`${msgParts.join(' · ')} 확인됐어요`);
+      } else if(!foundNumber){
         showToast('확대 촬영에서도 인식이 어려웠어요 - 직접 입력해주세요');
       }
     };
@@ -1193,7 +1223,7 @@ function renderWizardStep4(modal){
         <div class="it-lot">LOT ${escapeHtml(it.lot)}</div>
         <div class="it-meta">사진 ${it.photos.length}장${it.expiryDate ? ' · 유효기간 ' + escapeHtml(it.expiryDate) : ''}${it.quantity ? ' · 수량 ' + escapeHtml(it.quantity) : ''}</div>
       </div>`).join('')}
-    <div class="hint">추가 첨부: 인수증 1장${wz.zoomImage ? ' + 반품번호 확대 1장' : ''}</div>
+    <div class="hint">추가 첨부: 인수증 1장${wz.zoomImage ? ' + 반품번호·반품처 확대 1장' : ''}</div>
     <div class="field" style="margin-top:12px;"><label>메모</label><textarea id="wz_memo" placeholder="특이사항 (선택)"></textarea></div>
     <div class="field"><label>등록자 *</label><input id="wz_by" type="text" placeholder="이름" value="${escapeHtml(myName)}"></div>
     <div class="err" id="wz4_err">등록자 이름을 입력해주세요</div>
