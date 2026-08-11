@@ -693,6 +693,21 @@ function extractCodeLike(text, pattern){
   return m ? m[0] : '';
 }
 
+// 표 형식 인수증은 OCR이 "라벨 → 값"을 나란히 안 읽고 열 단위로 따로 읽는 경우가 많아서,
+// 라벨 뒤 텍스트를 찾는 대신 "병원" 글자가 포함된 줄을 통째로 스캔해서 후보로 씀 (훨씬 안정적)
+function extractHospitalGuess(text){
+  if(!text) return '';
+  const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  const clean = (s) => s.replace(/^(반품처|병원명)\s*[:：]?\s*/, '').trim();
+  for(const line of lines){
+    if(line.includes('병원') && line.length >= 4 && line.length <= 60){
+      const c = clean(line);
+      if(c) return c.slice(0, 40);
+    }
+  }
+  return '';
+}
+
 // GS1 바코드 사람이 읽는 텍스트 (01)04039361097042(10)LOT(17)EXP 에서 (01) 뒤 GTIN(12~14자리 숫자)을 찾음
 function extractGtinCandidate(text){
   if(!text) return '';
@@ -803,7 +818,7 @@ function resetWizardState(){
   wz = {
     step: 1,
     receiptImage: null, receiptRawText: '',
-    returnNumber: '', hospitalName: '', returnRequestDate: '', businessNumber: '',
+    returnNumber: '', hospitalName: '', returnRequestDate: '',
     zoomImage: null, zoomRawText: '',
     items: [],   // 확정된 품목: {id, productCode, productName, lot, expiryDate, quantity, photos:[{data, rawText}]}
     draft: { productCode:'', productName:'', lot:'', expiryDate:'', quantity:'', photos:[], gtinLast6:'', masterMatched:false, masterOriginalCode:'' }, // 입력 중인 품목
@@ -874,13 +889,9 @@ function renderWizardStep1(modal){
       const text = await runOcr(wz.receiptImage);
       wz.receiptRawText = text;
       wz.returnNumber = extractDigitsNear(text, '반품번호', 6, 14);
-      wz.businessNumber = extractDigitsNear(text, '사업자', 8, 12);
       wz.returnRequestDate = extractDateNear(text);
-      const hIdx = text.indexOf('병원명');
-      if(hIdx !== -1){
-        const seg = text.slice(hIdx, hIdx+80).replace('병원명','').trim();
-        wz.hospitalName = seg.split('\n')[0].slice(0,40).trim();
-      }
+      const hospGuess1 = extractHospitalGuess(text);
+      if(hospGuess1) wz.hospitalName = hospGuess1;
       document.getElementById('wzReceiptProgressWrap').style.display = 'none';
       document.getElementById('wz1NextBtn').disabled = false;
       showToast(wz.returnNumber ? `반품번호 ${wz.returnNumber} 인식됐어요` : '전체샷이라 자동인식은 안 될 수 있어요 (정상) - 다음 단계 확대촬영에서 다시 인식할게요');
@@ -904,7 +915,6 @@ function renderWizardStep2(modal){
     <div class="field"><label>반품번호 *</label><input id="wz_returnNumber" type="text" value="${escapeHtml(wz.returnNumber)}" placeholder="예: 0042933059"></div>
     <div class="field"><label>병원명 / 반품처</label><input id="wz_hospitalName" type="text" value="${escapeHtml(wz.hospitalName)}"></div>
     <div class="field"><label>반품요청일</label><input id="wz_returnRequestDate" type="text" value="${escapeHtml(wz.returnRequestDate)}" placeholder="예: 2026.08.18"></div>
-    <div class="field"><label>사업자번호</label><input id="wz_businessNumber" type="text" value="${escapeHtml(wz.businessNumber)}"></div>
 
     <div class="hint" style="margin:14px 0 6px;">📷 반품번호 · 반품처 부분 확대 촬영 (선택 · 정확도 향상용)</div>
     <div class="capture-zone" id="wzZoomZone">
@@ -947,20 +957,8 @@ function renderWizardStep2(modal){
         }
       }
 
-      // 반품처(병원명)도 확대샷 텍스트에서 재시도 - "반품처" 라벨 우선, 없으면 "병원명" 라벨로 재시도
-      let foundHospital = '';
-      const rIdx = text.indexOf('반품처');
-      if(rIdx !== -1){
-        const seg = text.slice(rIdx, rIdx + 80).replace('반품처', '').trim();
-        foundHospital = seg.split('\n')[0].slice(0, 40).trim();
-      }
-      if(!foundHospital){
-        const hIdx2 = text.indexOf('병원명');
-        if(hIdx2 !== -1){
-          const seg2 = text.slice(hIdx2, hIdx2 + 80).replace('병원명', '').trim();
-          foundHospital = seg2.split('\n')[0].slice(0, 40).trim();
-        }
-      }
+      // 반품처(병원명)도 확대샷 텍스트에서 재시도 - "병원" 글자가 들어간 줄을 통째로 스캔 (표 OCR에서 라벨-값이 안 붙어도 안정적)
+      const foundHospital = extractHospitalGuess(text);
       if(foundHospital){
         const curHosp = document.getElementById('wz_hospitalName').value.trim();
         if(!curHosp){
@@ -984,7 +982,6 @@ function renderWizardStep2(modal){
     wz.returnNumber = document.getElementById('wz_returnNumber').value.trim();
     wz.hospitalName = document.getElementById('wz_hospitalName').value.trim();
     wz.returnRequestDate = document.getElementById('wz_returnRequestDate').value.trim();
-    wz.businessNumber = document.getElementById('wz_businessNumber').value.trim();
     if(!wz.returnNumber){ document.getElementById('wz2_err').style.display = 'block'; return; }
     wz.step = 3;
     renderWizardStep();
@@ -1253,7 +1250,7 @@ async function submitWizard(){
 
   const rec = {
     id, returnNumber: wz.returnNumber, hospitalName: wz.hospitalName, returnRequestDate: wz.returnRequestDate,
-    businessNumber: wz.businessNumber, memo,
+    memo,
     items: wz.items.map(it => ({ id: it.id, productCode: it.productCode, productName: it.productName, lot: it.lot, expiryDate: it.expiryDate, quantity: it.quantity })),
     status: 'pending', registeredBy: by, registeredAt: now,
     confirmedBy: null, confirmedAt: null, confirmMemo: null,
