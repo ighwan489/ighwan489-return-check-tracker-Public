@@ -346,6 +346,10 @@ function initRealtimeSync(){
 const STATUS_LABEL = { pending:'검수대기', confirmed:'검수완료' };
 const STATUS_ICON = { pending:'⏳', confirmed:'✅' };
 
+// 품목(실물 제품) 상태값 - 블락배치와 동일한 코드 체계 중 우선 5개만 사용
+const ITEM_STATUS_LABEL = { A:'정상', B:'판정대기', D:'부적합', E:'유효기간경과', F:'유효기간임박' };
+const ITEM_STATUS_COLOR = { A:'var(--green)', B:'var(--blue)', D:'var(--danger)', E:'var(--danger)', F:'var(--amber)' };
+
 function itemsOf(r){ return Array.isArray(r.items) ? r.items : []; }
 
 function getFiltered(){
@@ -396,7 +400,7 @@ function render(){
           <span>${fmtDate(r.registeredAt)}</span>
         </div>
         ${its.length > 0 ? `<div class="item-chip-list">
-          ${shown.map(it => `<div class="item-chip"><span class="ic-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')}</span><span class="ic-lot">${escapeHtml(it.lot || '-')}</span></div>`).join('')}
+          ${shown.map(it => { const st = it.status || 'A'; return `<div class="item-chip"><span class="ic-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')} <span style="font-size:9.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st] || 'var(--ink-muted)'}; padding:1px 6px; border-radius:8px;">${st}</span></span><span class="ic-lot">${escapeHtml(it.lot || '-')}</span></div>`; }).join('')}
           ${moreCount > 0 ? `<div class="item-chip" style="justify-content:center; color:var(--ink-muted);">+${moreCount}건 더보기</div>` : ''}
         </div>` : ''}
         ${r.memo ? `<div class="memo">${escapeHtml(r.memo)}</div>` : ''}
@@ -536,8 +540,9 @@ async function openDetail(id){
 
   its.forEach(it => {
     const itPhotos = photos.filter(p => p.itemId === it.id);
-    html += `<div class="item-section-title">📦 ${escapeHtml(it.productName || it.productCode || '제품명 미입력')} · LOT ${escapeHtml(it.lot || '-')}</div>`;
-    html += `<div class="meta-row" style="margin-bottom:8px;">
+    const st = it.status || 'A';
+    html += `<div class="item-section-title">📦 ${escapeHtml(it.productName || it.productCode || '제품명 미입력')} · LOT ${escapeHtml(it.lot || '-')} <span style="font-size:10.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st] || 'var(--ink-muted)'}; padding:2px 7px; border-radius:10px; margin-left:4px;">${st} · ${ITEM_STATUS_LABEL[st] || st}</span></div>
+    <div class="meta-row" style="margin-bottom:8px;">
       ${it.productCode ? `<span>제품코드 <b>${escapeHtml(it.productCode)}</b></span>` : ''}
       ${it.expiryDate ? `<span>유효기간 <b>${escapeHtml(it.expiryDate)}</b></span>` : ''}
       ${it.quantity ? `<span>수량 <b>${escapeHtml(it.quantity)}</b></span>` : ''}
@@ -751,17 +756,114 @@ function extractGtinCandidate(text){
   return m ? m[0] : '';
 }
 
-// 제품코드: "REF" 라벨 근처 값 우선 → F로 시작하는 코드 → 실패시 빈값 (마스터 매칭이나 수기입력으로 채움)
+// 제품코드: REF/REF NO/REF NO./REF NUMBER/제품코드/제품 코드 라벨을 우선 찾고, 라벨 바로 뒤 또는 다음 줄의 값을 가져옴
+// 하이픈(-)·슬래시(/)·점(.) 포함 코드도 지원. 실패 시 기존 F로 시작하는 코드 패턴으로 폴백.
+const REF_LABELS = ['REF NO.', 'REF NO', 'REF NUMBER', 'REF', '제품코드', '제품 코드'];
+
+// 라인 안에서 코드처럼 생긴 토큰(영문/숫자 + 하이픈·슬래시·점)을 찾음. 구분자 빼고 4자 이상이어야 인정 (오탐 방지)
+function matchCodeToken(line){
+  if(!line) return '';
+  const matches = line.match(/[A-Za-z0-9]+(?:[-\/.][A-Za-z0-9]+)*/g) || [];
+  for(const m of matches){
+    if(m.replace(/[-\/.]/g, '').length >= 4) return m.toUpperCase();
+  }
+  return '';
+}
+
+function findValueNearLabel(lines, upperLines, labelUp, matcher){
+  for(let i = 0; i < lines.length; i++){
+    const idx = upperLines[i].indexOf(labelUp);
+    if(idx === -1) continue;
+    const rest = lines[i].slice(idx + labelUp.length).trim();
+    let val = matcher(rest);
+    if(!val){
+      for(let off = 1; off <= 2 && !val; off++){
+        if(lines[i + off]) val = matcher(lines[i + off]);
+      }
+    }
+    if(val) return val;
+  }
+  return '';
+}
+
 function extractProductCodeGuess(text){
   if(!text) return '';
-  const refIdx = text.indexOf('REF');
-  if(refIdx !== -1){
-    const window = text.slice(refIdx, refIdx + 40).replace('REF','');
-    const m = window.match(/[A-Z0-9]{6,12}/);
-    if(m) return m[0];
+  const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  const upperLines = lines.map(l => l.toUpperCase());
+  for(const label of REF_LABELS){
+    const val = findValueNearLabel(lines, upperLines, label.toUpperCase(), matchCodeToken);
+    if(val) return val;
   }
   const fMatch = text.match(/\bF\d{5,10}\b/);
   return fMatch ? fMatch[0] : '';
+}
+
+// LOT/제조번호: LOT/LOT NO/LOT NO./LOT NUMBER/BATCH/BATCH NO/BATCH NUMBER/제조번호/제조 번호 라벨 우선 탐색.
+// GS1 사람인식 텍스트 (10)LOTVALUE 형식도 지원. 라벨을 못 찾으면 무작위 숫자를 넣지 않고 빈값으로 남김(오인식 방지).
+const LOT_LABELS = ['LOT NUMBER', 'LOT NO.', 'LOT NO', 'BATCH NUMBER', 'BATCH NO.', 'BATCH NO', 'LOT', 'BATCH', '제조번호', '제조 번호'];
+
+function extractLotGuess(text){
+  if(!text) return '';
+  const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  const upperLines = lines.map(l => l.toUpperCase());
+  for(const label of LOT_LABELS){
+    const val = findValueNearLabel(lines, upperLines, label.toUpperCase(), matchCodeToken);
+    if(val) return val;
+  }
+  const gs1 = text.match(/\(10\)\s*([A-Za-z0-9]{4,15})/);
+  if(gs1) return gs1[1].toUpperCase();
+  return '';
+}
+
+// 유효기간: 월의 마지막 날짜를 정확히 계산 (윤년 포함) - 하드코딩 없이 JS Date로 계산
+function getLastDayOfMonth(year, month){
+  return new Date(year, month, 0).getDate();
+}
+
+function formatExpiryParts(y, mo, d){
+  const mm = String(mo).padStart(2, '0');
+  if(d){
+    return `${y}.${mm}.${String(d).padStart(2, '0')}`;
+  }
+  const lastDay = getLastDayOfMonth(y, mo);
+  return `${y}.${mm}.${String(lastDay).padStart(2, '0')}`;
+}
+
+// 한 줄에서 YYYY-MM-DD / YYYY.MM.DD / YYYY/MM/DD 또는 YYYY-MM / YYYY.MM / YYYY/MM 형태의 날짜를 찾음
+function matchDateFlexible(line){
+  if(!line) return null;
+  let m = line.match(/(20\d{2})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
+  if(m) return { y: +m[1], mo: +m[2], d: +m[3] };
+  m = line.match(/(20\d{2})[.\-\/](\d{1,2})(?!\d)/);
+  if(m) return { y: +m[1], mo: +m[2], d: null };
+  return null;
+}
+
+// 유효기간: EXP/EXP DATE/EXP.DATE/EXPIRY/EXPIRATION/USE BY/유효기간/유효일자/사용기한 라벨을 우선 탐색.
+// MFG·MFD·제조일 라벨은 절대 유효기간으로 쓰지 않음 (라벨 자체를 EXP 계열만 검색하므로 구조적으로 방지됨).
+// 라벨을 못 찾으면 전체에서 아무 날짜나 가져오지 않고 빈값으로 남김.
+const EXP_LABELS = ['EXP DATE', 'EXP.DATE', 'EXPIRY DATE', 'EXPIRATION DATE', 'USE BY', 'EXPIRY', 'EXPIRATION', 'EXP', '유효기간', '유효일자', '사용기한'];
+
+function extractExpiryGuess(text){
+  if(!text) return '';
+  const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  const upperLines = lines.map(l => l.toUpperCase());
+  for(const label of EXP_LABELS){
+    const labelUp = label.toUpperCase();
+    for(let i = 0; i < lines.length; i++){
+      const idx = upperLines[i].indexOf(labelUp);
+      if(idx === -1) continue;
+      const rest = lines[i].slice(idx + labelUp.length);
+      let dp = matchDateFlexible(rest) || matchDateFlexible(lines[i]);
+      if(!dp){
+        for(let off = 1; off <= 2 && !dp; off++){
+          if(lines[i + off]) dp = matchDateFlexible(lines[i + off]);
+        }
+      }
+      if(dp) return formatExpiryParts(dp.y, dp.mo, dp.d);
+    }
+  }
+  return '';
 }
 
 // ===================== 제품코드 마스터 관리 (바코드 끝 6자리 ↔ 제품코드) ===================== //
@@ -856,8 +958,9 @@ function resetWizardState(){
     receiptImage: null, receiptRawText: '',
     returnNumber: '', hospitalName: '', returnRequestDate: '',
     zoomImage: null, zoomRawText: '',
-    items: [],   // 확정된 품목: {id, productCode, productName, lot, expiryDate, quantity, photos:[{data, rawText}]}
-    draft: { productCode:'', productName:'', lot:'', expiryDate:'', quantity:'', photos:[], gtinLast6:'', masterMatched:false, masterOriginalCode:'' }, // 입력 중인 품목
+    items: [],   // 확정된 품목: {id, productCode, productName, lot, expiryDate, quantity, status, photos:[{data, rawText}]}
+    draft: { productCode:'', productName:'', lot:'', expiryDate:'', quantity:'', status:'A', photos:[], gtinLast6:'', masterMatched:false, masterOriginalCode:'' }, // 입력 중인 품목
+    draftGen: 0, // 품목(draft) 세대 ID - 늦게 끝난 OCR 결과가 다른 품목에 잘못 들어가는 것을 방지
     editingItemId: null, // 품목 수정 중이면 해당 id
     memo: ''
   };
@@ -1056,11 +1159,16 @@ function renderWizardStep3(modal){
       <div id="wzDraftProgressWrap" style="display:none; margin-top:10px;"><div class="ocr-progress" id="wzDraftProgress">분석 중...</div></div>
       <div id="wzDraftResultMsg" style="display:none;"></div>
 
-      <div class="field" style="margin-top:14px;"><label>제품코드</label><input id="wz_it_productCode" type="text" value="${escapeHtml(wz.draft.productCode)}" placeholder="예: F00005444"></div>
-      <div class="field"><label>제품명</label><input id="wz_it_productName" type="text" value="${escapeHtml(wz.draft.productName)}" placeholder="인수증 참고해서 입력"></div>
-      <div class="field"><label>제조번호(LOT) *</label><input id="wz_it_lot" type="text" value="${escapeHtml(wz.draft.lot)}" placeholder="실물 라벨의 LOT 번호"></div>
-      <div class="field"><label>유효기간</label><input id="wz_it_expiryDate" type="text" value="${escapeHtml(wz.draft.expiryDate)}" placeholder="예: 2028.03"></div>
-      <div class="field"><label>수량</label><input id="wz_it_quantity" type="text" value="${escapeHtml(wz.draft.quantity)}" placeholder="예: 15"></div>
+      <div class="field" style="margin-top:14px;"><label>제품코드</label><input id="wz_it_productCode" type="text" autocomplete="off" value="${escapeHtml(wz.draft.productCode)}" placeholder="예: F00005444, 820-6045"></div>
+      <div class="field"><label>제품명</label><input id="wz_it_productName" type="text" autocomplete="off" value="${escapeHtml(wz.draft.productName)}" placeholder="인수증 참고해서 입력"></div>
+      <div class="field"><label>제조번호(LOT) *</label><input id="wz_it_lot" type="text" autocomplete="off" value="${escapeHtml(wz.draft.lot)}" placeholder="실물 라벨의 LOT 번호"></div>
+      <div class="field"><label>유효기간</label><input id="wz_it_expiryDate" type="text" autocomplete="off" value="${escapeHtml(wz.draft.expiryDate)}" placeholder="예: 2028.03 → 자동으로 2028.03.31"></div>
+      <div class="field"><label>수량</label><input id="wz_it_quantity" type="text" autocomplete="off" value="${escapeHtml(wz.draft.quantity)}" placeholder="예: 15"></div>
+      <div class="field"><label>상태값</label>
+        <select id="wz_it_status">
+          ${Object.keys(ITEM_STATUS_LABEL).map(k => `<option value="${k}" ${wz.draft.status === k ? 'selected' : ''}>${k} · ${ITEM_STATUS_LABEL[k]}</option>`).join('')}
+        </select>
+      </div>
       <div class="hint">📌 자동 인식된 값은 참고용이에요. 실물과 반드시 대조해서 확인·수정해주세요.</div>
       <div class="err" id="wz_it_err">사진 1장 이상 + 제조번호(LOT)는 필수예요</div>
       <div class="modal-actions" style="margin-top:12px;">
@@ -1081,32 +1189,46 @@ function renderWizardStep3(modal){
   const addBtn = document.getElementById('wzAddPhotoBtn');
   const input = document.getElementById('wzDraftPhotoInput');
   addBtn.addEventListener('click', ()=> input.click());
-  input.addEventListener('change', async ()=>{
+  input.addEventListener('change', ()=>{
     if(!input.files.length) return;
     const file = input.files[0];
+    const genAtStart = wz.draftGen; // 이 사진 캡처를 시작한 시점의 품목 세대 - 나중에 결과 적용 전 재확인용
     const reader = new FileReader();
     reader.onload = async (e)=>{
+      if(wz.draftGen !== genAtStart) return; // 그 사이 품목이 바뀌었으면(추가/취소/수정) 중단
       const dataUrl = e.target.result;
       const idx = wz.draft.photos.length;
       wz.draft.photos.push({ data: dataUrl, rawText: '' });
       renderWzDraftThumbs();
+      const progWrap = document.getElementById('wzDraftProgressWrap');
       const resultEl3 = document.getElementById('wzDraftResultMsg');
-      resultEl3.style.display = 'none';
-      document.getElementById('wzDraftProgressWrap').style.display = 'block';
-      document.getElementById('wzDraftProgress').textContent = `🔄 사진 ${idx+1} 분석 중... (몇 초 걸려요, 기다리지 않고 바로 손으로 입력하셔도 돼요)`;
+      if(resultEl3) resultEl3.style.display = 'none';
+      if(progWrap){ progWrap.style.display = 'block'; document.getElementById('wzDraftProgress').textContent = `🔄 사진 ${idx+1} 분석 중... (몇 초 걸려요, 기다리지 않고 바로 손으로 입력하셔도 돼요)`; }
+
       const text = await runOcr(dataUrl);
-      wz.draft.photos[idx].rawText = text;
-      document.getElementById('wzDraftProgressWrap').style.display = 'none';
+      if(wz.draftGen !== genAtStart) return; // OCR 끝난 시점에도 재확인 - 그 사이 다른 품목으로 넘어갔으면 결과 버림
+      if(idx < wz.draft.photos.length) wz.draft.photos[idx].rawText = text;
+      if(progWrap) progWrap.style.display = 'none';
+
+      const codeEl = document.getElementById('wz_it_productCode');
+      const nameEl = document.getElementById('wz_it_productName');
+      const lotEl = document.getElementById('wz_it_lot');
+      const expEl = document.getElementById('wz_it_expiryDate');
+      if(!codeEl || !lotEl || !expEl) return; // 화면이 이미 다른 단계/품목으로 넘어간 경우 DOM 없음
 
       const combined = wz.draft.photos.map(p=>p.rawText).join('\n');
       let found3 = [];
-      if(!document.getElementById('wz_it_lot').value.trim()){
-        const lotGuess = extractCodeLike(combined, /\b(?=[A-Z0-9]{5,12}\b)(?=.*[0-9])[A-Z0-9]{5,12}\b/);
-        if(lotGuess){ document.getElementById('wz_it_lot').value = lotGuess; found3.push(`LOT ${lotGuess}`); }
+
+      // 1순위: 제품코드(REF) 라벨 기반 추출
+      // 2순위: LOT/제조번호 라벨 기반 추출 (라벨 못 찾으면 무작위 숫자 넣지 않음)
+      if(!lotEl.value.trim()){
+        const lotGuess = extractLotGuess(combined);
+        if(lotGuess){ lotEl.value = lotGuess; found3.push(`LOT ${lotGuess}`); }
       }
-      if(!document.getElementById('wz_it_expiryDate').value.trim()){
-        const dateGuess = extractDateNear(combined);
-        if(dateGuess){ document.getElementById('wz_it_expiryDate').value = dateGuess; found3.push(`유효기간 ${dateGuess}`); }
+      // 3순위: 유효기간(EXP) 라벨 기반 추출 - 월까지만 있으면 자동으로 그 달 말일로 채움, MFG 날짜는 무시
+      if(!expEl.value.trim()){
+        const dateGuess = extractExpiryGuess(combined);
+        if(dateGuess){ expEl.value = dateGuess; found3.push(`유효기간 ${dateGuess}`); }
       }
 
       // 바코드(GTIN) 끝 6자리로 제품코드 마스터 자동 조회 - 등록해둔 매핑이 있으면 최우선으로 채움
@@ -1115,25 +1237,27 @@ function renderWizardStep3(modal){
       if(gtin){
         wz.draft.gtinLast6 = gtin.slice(-6);
         masterHit = await window.fbGetProductMaster(wz.draft.gtinLast6);
+        if(wz.draftGen !== genAtStart) return; // 마스터 조회 중에도 품목이 바뀌었을 수 있음
       }
       if(masterHit && masterHit.productCode){
-        document.getElementById('wz_it_productCode').value = masterHit.productCode;
-        if(masterHit.productName && !document.getElementById('wz_it_productName').value.trim()){
-          document.getElementById('wz_it_productName').value = masterHit.productName;
-        }
+        codeEl.value = masterHit.productCode;
+        if(masterHit.productName && !nameEl.value.trim()) nameEl.value = masterHit.productName;
         wz.draft.masterMatched = true;
         wz.draft.masterOriginalCode = masterHit.productCode;
         found3.push(`제품코드 ${masterHit.productCode} (마스터)`);
-      } else if(!document.getElementById('wz_it_productCode').value.trim()){
+      } else if(!codeEl.value.trim()){
         const codeGuess = extractProductCodeGuess(combined);
-        if(codeGuess){ document.getElementById('wz_it_productCode').value = codeGuess; found3.push(`제품코드 ${codeGuess}`); }
+        if(codeGuess){ codeEl.value = codeGuess; found3.push(`제품코드 ${codeGuess}`); }
       }
 
-      resultEl3.style.display = 'block';
-      if(found3.length > 0){
-        resultEl3.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--green); background:var(--green-bg); padding:8px 10px; border-radius:8px; margin-top:8px;">✅ 자동 인식: ${escapeHtml(found3.join(' · '))} - 실물과 대조해서 확인해주세요</div>`;
-      } else {
-        resultEl3.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--danger); background:#FBEAE8; padding:8px 10px; border-radius:8px; margin-top:8px;">⚠️ 자동 인식이 안 됐어요 - 아래 칸에 직접 입력해주세요</div>`;
+      const resultEl3b = document.getElementById('wzDraftResultMsg');
+      if(resultEl3b){
+        resultEl3b.style.display = 'block';
+        if(found3.length > 0){
+          resultEl3b.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--green); background:var(--green-bg); padding:8px 10px; border-radius:8px; margin-top:8px;">✅ 자동 인식: ${escapeHtml(found3.join(' · '))} - 실물과 대조해서 확인해주세요</div>`;
+        } else {
+          resultEl3b.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--danger); background:#FBEAE8; padding:8px 10px; border-radius:8px; margin-top:8px;">⚠️ 자동 인식되지 않았어요 - 실물 라벨을 보고 직접 입력해주세요</div>`;
+        }
       }
       input.value = '';
     };
@@ -1176,6 +1300,12 @@ function wzReadDraftFieldsFromDom(){
   wz.draft.lot = document.getElementById('wz_it_lot').value.trim();
   wz.draft.expiryDate = document.getElementById('wz_it_expiryDate').value.trim();
   wz.draft.quantity = document.getElementById('wz_it_quantity').value.trim();
+  const statusEl = document.getElementById('wz_it_status');
+  wz.draft.status = statusEl ? statusEl.value : 'A';
+}
+
+function freshDraft(){
+  return { productCode:'', productName:'', lot:'', expiryDate:'', quantity:'', status:'A', photos:[], gtinLast6:'', masterMatched:false, masterOriginalCode:'' };
 }
 
 function wzCommitDraftItem(){
@@ -1194,7 +1324,8 @@ function wzCommitDraftItem(){
   } else {
     wz.items.push({ id: genId(), ...wz.draft, photos: wz.draft.photos });
   }
-  wz.draft = { productCode:'', productName:'', lot:'', expiryDate:'', quantity:'', photos:[], gtinLast6:'', masterMatched:false, masterOriginalCode:'' };
+  wz.draft = freshDraft();
+  wz.draftGen++; // 새 세대 시작 - 이전 품목에 대한 늦은 OCR 응답은 이제 전부 무시됨
   document.getElementById('wz3_err').style.display = 'none';
   renderWizardStep3(document.getElementById('wizardModal'));
   showToast('품목이 목록에 추가됐어요 - 다음 품목을 이어서 촬영해주세요');
@@ -1217,9 +1348,10 @@ function wzCommitDraftItem(){
 function wzEditItem(itemId){
   const it = wz.items.find(x => x.id === itemId);
   if(!it) return;
-  wz.draft = { productCode: it.productCode, productName: it.productName, lot: it.lot, expiryDate: it.expiryDate, quantity: it.quantity, photos: [...it.photos], gtinLast6: it.gtinLast6 || '', masterMatched: !!it.masterMatched, masterOriginalCode: it.masterOriginalCode || '' };
+  wz.draft = { productCode: it.productCode, productName: it.productName, lot: it.lot, expiryDate: it.expiryDate, quantity: it.quantity, status: it.status || 'A', photos: [...it.photos], gtinLast6: it.gtinLast6 || '', masterMatched: !!it.masterMatched, masterOriginalCode: it.masterOriginalCode || '' };
   wz.items = wz.items.filter(x => x.id !== itemId);
   wz.editingItemId = itemId;
+  wz.draftGen++; // 새 편집 세션 시작 - 이전에 떠돌던 OCR 응답 전부 무효화
   renderWizardStep3(document.getElementById('wizardModal'));
 }
 
@@ -1227,7 +1359,8 @@ function wzCancelEditItem(){
   if(wz.editingItemId){
     wz.items.push({ id: wz.editingItemId, ...wz.draft, photos: wz.draft.photos });
   }
-  wz.draft = { productCode:'', productName:'', lot:'', expiryDate:'', quantity:'', photos:[], gtinLast6:'', masterMatched:false, masterOriginalCode:'' };
+  wz.draft = freshDraft();
+  wz.draftGen++;
   wz.editingItemId = null;
   renderWizardStep3(document.getElementById('wizardModal'));
 }
@@ -1245,11 +1378,13 @@ function renderWzItemsList(){
     return;
   }
   wrap.innerHTML = `<div class="hint" style="margin-bottom:8px;">✅ 목록에 추가된 품목 (${wz.items.length}건)</div>` +
-    wz.items.map(it => `
+    wz.items.map(it => {
+      const st = it.status || 'A';
+      return `
     <div class="item-card">
       <div class="item-card-top">
         <div>
-          <div class="it-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')}</div>
+          <div class="it-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')} <span style="font-size:10.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st] || 'var(--ink-muted)'}; padding:2px 7px; border-radius:10px; margin-left:4px;">${st} · ${ITEM_STATUS_LABEL[st] || st}</span></div>
           <div class="it-lot">LOT ${escapeHtml(it.lot)}</div>
           <div class="it-meta">사진 ${it.photos.length}장${it.expiryDate ? ' · 유효기간 ' + escapeHtml(it.expiryDate) : ''}${it.quantity ? ' · 수량 ' + escapeHtml(it.quantity) : ''}</div>
         </div>
@@ -1258,7 +1393,8 @@ function renderWzItemsList(){
           <button onclick="wzRemoveItem('${it.id}')">삭제</button>
         </div>
       </div>
-    </div>`).join('');
+    </div>`;
+    }).join('');
 }
 
 // ---- Step 4: 최종 확인 & 저장 ---- //
@@ -1269,12 +1405,12 @@ function renderWizardStep4(modal){
     <div class="field"><label>반품번호</label><input type="text" value="${escapeHtml(wz.returnNumber)}" disabled></div>
     <div class="field"><label>병원명</label><input type="text" value="${escapeHtml(wz.hospitalName || '-')}" disabled></div>
     <div class="hint" style="margin-bottom:8px;">등록될 품목 (${wz.items.length}건)</div>
-    ${wz.items.map(it => `
+    ${wz.items.map(it => { const st = it.status || 'A'; return `
       <div class="item-card">
-        <div class="it-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')}</div>
+        <div class="it-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')} <span style="font-size:10.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st] || 'var(--ink-muted)'}; padding:2px 7px; border-radius:10px; margin-left:4px;">${st} · ${ITEM_STATUS_LABEL[st] || st}</span></div>
         <div class="it-lot">LOT ${escapeHtml(it.lot)}</div>
         <div class="it-meta">사진 ${it.photos.length}장${it.expiryDate ? ' · 유효기간 ' + escapeHtml(it.expiryDate) : ''}${it.quantity ? ' · 수량 ' + escapeHtml(it.quantity) : ''}</div>
-      </div>`).join('')}
+      </div>`; }).join('')}
     <div class="hint">추가 첨부: 인수증 1장${wz.zoomImage ? ' + 반품번호·반품처 확대 1장' : ''}</div>
     <div class="field" style="margin-top:12px;"><label>메모</label><textarea id="wz_memo" placeholder="특이사항 (선택)"></textarea></div>
     <div class="field"><label>등록자 *</label><input id="wz_by" type="text" placeholder="이름" value="${escapeHtml(myName)}"></div>
@@ -1287,7 +1423,7 @@ function renderWizardStep4(modal){
   document.getElementById('wz4SubmitBtn').addEventListener('click', submitWizard);
 }
 
-function wzGoStep(n){ wz.step = n; renderWizardStep(); }
+function wzGoStep(n){ wz.draftGen++; wz.step = n; renderWizardStep(); }
 
 async function submitWizard(){
   const by = document.getElementById('wz_by').value.trim();
@@ -1306,7 +1442,7 @@ async function submitWizard(){
   const rec = {
     id, returnNumber: wz.returnNumber, hospitalName: wz.hospitalName, returnRequestDate: wz.returnRequestDate,
     memo,
-    items: wz.items.map(it => ({ id: it.id, productCode: it.productCode, productName: it.productName, lot: it.lot, expiryDate: it.expiryDate, quantity: it.quantity })),
+    items: wz.items.map(it => ({ id: it.id, productCode: it.productCode, productName: it.productName, lot: it.lot, expiryDate: it.expiryDate, quantity: it.quantity, status: it.status || 'A' })),
     status: 'pending', registeredBy: by, registeredAt: now,
     confirmedBy: null, confirmedAt: null, confirmMemo: null,
     photoCount: totalPhotos
@@ -1352,15 +1488,16 @@ function exportToExcel(){
       '검수자': r.confirmedBy || '', '검수일시': r.confirmedAt ? fmtDate(r.confirmedAt) : '', '메모': r.memo || ''
     };
     if(its.length === 0){
-      rows.push({ ...base, '제품코드':'', '제품명':'', '제조번호':'', '유효기간':'', '수량':'' });
+      rows.push({ ...base, '제품코드':'', '제품명':'', '제조번호':'', '유효기간':'', '수량':'', '품목상태값':'' });
     } else {
       its.forEach(it => {
-        rows.push({ ...base, '제품코드': it.productCode||'', '제품명': it.productName||'', '제조번호': it.lot||'', '유효기간': it.expiryDate||'', '수량': it.quantity||'' });
+        const st = it.status || 'A';
+        rows.push({ ...base, '제품코드': it.productCode||'', '제품명': it.productName||'', '제조번호': it.lot||'', '유효기간': it.expiryDate||'', '수량': it.quantity||'', '품목상태값': `${st} (${ITEM_STATUS_LABEL[st] || st})` });
       });
     }
   });
   const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = [{wch:14},{wch:10},{wch:20},{wch:14},{wch:10},{wch:16},{wch:10},{wch:16},{wch:24},{wch:22},{wch:20},{wch:14},{wch:12},{wch:8}];
+  ws['!cols'] = [{wch:14},{wch:10},{wch:20},{wch:14},{wch:10},{wch:16},{wch:10},{wch:16},{wch:24},{wch:22},{wch:20},{wch:14},{wch:12},{wch:8},{wch:16}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '반품검수기록');
   const now = new Date();
