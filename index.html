@@ -619,8 +619,11 @@ function preprocessImageForOcr(dataUrl){
   return new Promise((resolve, reject)=>{
     const img = new Image();
     img.onload = ()=>{
-      const scale = 1.6;
-      const w = img.width * scale, h = img.height * scale;
+      // OCR 속도·정확도 균형을 위해 긴 변 기준으로 크기 정규화 - 휴대폰 원본(3000px+)은 줄이고, 작은 크롭은 키움
+      const targetLong = 1600;
+      const longSide = Math.max(img.width, img.height);
+      const scale = targetLong / longSide;
+      const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
       const canvas = document.createElement('canvas');
       canvas.width = w; canvas.height = h;
       const ctx = canvas.getContext('2d');
@@ -644,6 +647,32 @@ function preprocessImageForOcr(dataUrl){
   });
 }
 
+// Tesseract 단어별 좌표(bbox)를 이용해 같은 줄(y좌표 비슷한 것끼리)로 다시 묶고, 줄 안에서는 x좌표순으로 정렬
+// - 표 서식 문서에서 OCR이 "라벨들 먼저, 값들 나중" 식으로 순서를 뒤섞어 읽는 문제를 근본적으로 해결함
+function reconstructLinesFromWords(words){
+  if(!words || words.length === 0) return '';
+  const items = words
+    .filter(w => w && w.text && w.text.trim() && w.bbox)
+    .map(w => ({ text: w.text.trim(), cy: (w.bbox.y0 + w.bbox.y1) / 2, h: Math.max(1, w.bbox.y1 - w.bbox.y0), x0: w.bbox.x0 }));
+  if(items.length === 0) return '';
+  items.sort((a,b) => a.cy - b.cy);
+  const lines = [];
+  let current = [items[0]];
+  let lastCy = items[0].cy;
+  for(let i = 1; i < items.length; i++){
+    const it = items[i];
+    if(Math.abs(it.cy - lastCy) <= it.h * 0.6){
+      current.push(it);
+    } else {
+      lines.push(current);
+      current = [it];
+    }
+    lastCy = it.cy;
+  }
+  lines.push(current);
+  return lines.map(line => line.sort((a,b)=>a.x0-b.x0).map(w=>w.text).join(' ')).join('\n');
+}
+
 let ocrWorkerPromise = null;
 function getOcrWorker(){
   if(!ocrWorkerPromise){
@@ -657,7 +686,10 @@ async function runOcr(dataUrl){
     const pre = await preprocessImageForOcr(dataUrl);
     const worker = await getOcrWorker();
     const result = await worker.recognize(pre);
-    return (result && result.data && result.data.text) ? result.data.text : '';
+    const rawText = (result && result.data && result.data.text) ? result.data.text : '';
+    const words = (result && result.data && result.data.words) ? result.data.words : [];
+    const rebuilt = reconstructLinesFromWords(words);
+    return rebuilt || rawText; // 좌표 재조립이 되면 그걸 우선 사용, 실패하면 원본 텍스트로 폴백
   }catch(e){
     console.error('OCR error:', e);
     return '';
@@ -693,19 +725,23 @@ function extractCodeLike(text, pattern){
   return m ? m[0] : '';
 }
 
-// 표 형식 인수증은 OCR이 "라벨 → 값"을 나란히 안 읽고 열 단위로 따로 읽는 경우가 많아서,
-// 라벨 뒤 텍스트를 찾는 대신 "병원" 글자가 포함된 줄을 통째로 스캔해서 후보로 씀 (훨씬 안정적)
-function extractHospitalGuess(text){
+// 인수증 서식은 항상 같으므로 "반품처"/"병원명" 라벨과 같은 줄에서 라벨 오른쪽 텍스트를 통째로 가져옴
+// (좌표 재조립된 텍스트라 라벨-값이 같은 줄에 붙어있음 - 값에 "병원"이라는 글자가 없어도 안정적으로 잡힘)
+function extractLabelValueSameLine(text, label){
   if(!text) return '';
-  const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
-  const clean = (s) => s.replace(/^(반품처|병원명)\s*[:：]?\s*/, '').trim();
+  const lines = text.split(/\n+/);
   for(const line of lines){
-    if(line.includes('병원') && line.length >= 4 && line.length <= 60){
-      const c = clean(line);
-      if(c) return c.slice(0, 40);
+    const idx = line.indexOf(label);
+    if(idx !== -1){
+      const rest = line.slice(idx + label.length).replace(/^[\s:：]+/, '').trim();
+      if(rest) return rest.slice(0, 60);
     }
   }
   return '';
+}
+
+function extractHospitalGuess(text){
+  return extractLabelValueSameLine(text, '반품처') || extractLabelValueSameLine(text, '병원명') || '';
 }
 
 // GS1 바코드 사람이 읽는 텍스트 (01)04039361097042(10)LOT(17)EXP 에서 (01) 뒤 GTIN(12~14자리 숫자)을 찾음
