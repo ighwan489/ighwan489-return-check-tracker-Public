@@ -964,7 +964,20 @@ function reconstructLinesFromWords(words){
     lastCy = it.cy;
   }
   lines.push(current);
-  return lines.map(line => line.sort((a,b)=>a.x0-b.x0).map(w=>w.text).join(' ')).join('\n');
+  const joined = lines.map(line => line.sort((a,b)=>a.x0-b.x0).map(w=>w.text).join(' ')).join('\n');
+  return collapseHangulSpacing(joined);
+}
+
+// Tesseract가 한글을 음절(글자) 단위로 쪼개서 인식하면 "반품번호"가 "반 품 번 호"처럼 글자 사이에 공백이 끼어버려서
+// 라벨 문자열 검색(indexOf)이 전부 실패함 - 한글끼리 붙어있던 공백만 골라서 제거함 (숫자/영문 사이 공백은 그대로 유지)
+function collapseHangulSpacing(text){
+  if(!text) return text;
+  let prev, cur = text;
+  do {
+    prev = cur;
+    cur = cur.replace(/([가-힣])[ \t]+([가-힣])/g, '$1$2'); // 공백/탭만 제거 (줄바꿈은 유지해야 서로 다른 줄이 합쳐지지 않음)
+  } while(cur !== prev);
+  return cur;
 }
 
 let ocrWorkerPromise = null;
@@ -983,7 +996,7 @@ async function runOcr(dataUrl){
     const rawText = (result && result.data && result.data.text) ? result.data.text : '';
     const words = (result && result.data && result.data.words) ? result.data.words : [];
     const rebuilt = reconstructLinesFromWords(words);
-    return rebuilt || rawText; // 좌표 재조립이 되면 그걸 우선 사용, 실패하면 원본 텍스트로 폴백
+    return rebuilt || collapseHangulSpacing(rawText); // 좌표 재조립이 되면 그걸 우선 사용, 실패하면 원본 텍스트로 폴백
   }catch(e){
     console.error('OCR error:', e);
     return '';
@@ -999,7 +1012,7 @@ async function runReceiptOcr(dataUrl){
     const rawText = (result && result.data && result.data.text) ? result.data.text : '';
     const words = (result && result.data && result.data.words) ? result.data.words : [];
     const rebuilt = reconstructLinesFromWords(words);
-    return { text: rebuilt || rawText, words };
+    return { text: rebuilt || collapseHangulSpacing(rawText), words };
   }catch(e){
     console.error('OCR error:', e);
     return { text: '', words: [] };
@@ -1056,7 +1069,7 @@ function extractValueByWordPosition(words, labelText){
     if(fuzzyLabelIncludes(cw[i].text, labelText)){
       labelBbox = cw[i].bbox;
     } else {
-      for(let span = 2; span <= 3 && i + span - 1 < cw.length; span++){
+      for(let span = 2; span <= labelText.length && i + span - 1 < cw.length; span++){
         const joined = cw.slice(i, i + span).map(w => w.text).join('');
         if(fuzzyLabelIncludes(joined, labelText)){ labelBbox = cw[i + span - 1].bbox; break; }
       }
