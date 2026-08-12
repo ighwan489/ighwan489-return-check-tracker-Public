@@ -551,6 +551,7 @@ async function openEditRecordModal(id){
   closeOverlay('editRecordOverlay');
   const rec = records.find(r => r.id === id);
   if(!rec) return;
+  const its = itemsOf(rec);
   const overlay = document.createElement('div');
   overlay.className = 'overlay'; overlay.id = 'editRecordOverlay';
   overlay.innerHTML = `<div class="modal">
@@ -567,6 +568,9 @@ async function openEditRecordModal(id){
       <button class="btn-cancel" onclick="closeOverlay('editRecordOverlay')">취소</button>
       <button class="btn-submit" id="er_saveBtn">저장</button>
     </div>
+
+    <div class="hint" style="margin:18px 0 8px; padding-top:14px; border-top:1px dashed var(--line);">📦 등록된 품목 (${its.length}건) - 여기서 바로 수정·삭제할 수 있어요</div>
+    <div id="er_itemsList"></div>
   </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('editRecordOverlay'); });
@@ -580,6 +584,8 @@ async function openEditRecordModal(id){
     if(!hospSuggest.contains(e.target) && e.target !== hospInput){ hospSuggest.style.display = 'none'; }
   });
 
+  renderEditRecordItemsList(id);
+
   document.getElementById('er_saveBtn').addEventListener('click', async ()=>{
     const returnNumber = document.getElementById('er_returnNumber').value.trim();
     const hospitalName = document.getElementById('er_hospitalName').value.trim();
@@ -591,6 +597,35 @@ async function openEditRecordModal(id){
     const ok = await window.fbUpdateRecord(id, { returnNumber, hospitalName, memo });
     showToast(ok ? '수정됐어요' : '수정됐지만 저장에 실패했어요');
   });
+}
+
+function renderEditRecordItemsList(recordId){
+  const wrap = document.getElementById('er_itemsList');
+  if(!wrap) return;
+  const rec = records.find(r => r.id === recordId);
+  if(!rec) return;
+  const its = itemsOf(rec);
+  if(its.length === 0){
+    wrap.innerHTML = `<div class="hint" style="text-align:center; padding:10px 0;">등록된 품목이 없어요</div>`;
+    return;
+  }
+  wrap.innerHTML = its.map(it => {
+    const st = it.status || 'A';
+    return `
+    <div class="item-card">
+      <div class="item-card-top">
+        <div>
+          <div class="it-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')} <span style="font-size:10.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st] || 'var(--ink-muted)'}; padding:2px 7px; border-radius:10px; margin-left:4px;">${st} · ${ITEM_STATUS_LABEL[st] || st}</span></div>
+          <div class="it-lot">LOT ${escapeHtml(it.lot || '-')}</div>
+          <div class="it-meta">${it.productCode ? '제품코드 ' + escapeHtml(it.productCode) + ' · ' : ''}${it.expiryDate ? '유효기간 ' + escapeHtml(it.expiryDate) : ''}${it.quantity ? ' · 수량 ' + escapeHtml(it.quantity) : ''}</div>
+        </div>
+        <div class="it-actions">
+          <button onclick="openEditItemModal('${recordId}','${it.id}', true)">수정</button>
+          <button onclick="deleteItemFromRecord('${recordId}','${it.id}', true)">삭제</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function openConfirmModal(id){
@@ -747,7 +782,7 @@ async function deletePhotoFromDetail(recordId, photoId){
 
 // ===================== 저장된 품목 수정/삭제 - 검수완료 여부와 무관하게 언제든 가능 ===================== //
 
-async function openEditItemModal(recordId, itemId){
+async function openEditItemModal(recordId, itemId, fromEditRecordModal){
   closeOverlay('editItemOverlay');
   const rec = records.find(r => r.id === recordId);
   if(!rec) return;
@@ -811,11 +846,12 @@ async function openEditItemModal(recordId, itemId){
     closeOverlay('editItemOverlay');
     const ok = await window.fbUpdateRecord(recordId, { items: its });
     showToast(ok ? '품목이 수정됐어요' : '수정됐지만 저장에 실패했어요');
-    openDetail(recordId);
+    if(fromEditRecordModal){ renderEditRecordItemsList(recordId); }
+    else { openDetail(recordId); }
   });
 }
 
-async function deleteItemFromRecord(recordId, itemId){
+async function deleteItemFromRecord(recordId, itemId, fromEditRecordModal){
   if(!confirm('이 품목을 삭제할까요? 첨부된 실물사진도 같이 삭제되고, 되돌릴 수 없어요.')) return;
   const rec = records.find(r => r.id === recordId);
   if(!rec) return;
@@ -832,7 +868,8 @@ async function deleteItemFromRecord(recordId, itemId){
     await window.fbUpdateRecord(recordId, { photoCount: rec.photoCount });
   }
   showToast(ok ? '품목 삭제 완료' : '삭제됐지만 저장에 일부 실패했어요');
-  openDetail(recordId);
+  if(fromEditRecordModal){ renderEditRecordItemsList(recordId); }
+  else { openDetail(recordId); }
 }
 
 // ===================== OCR / 이미지 유틸 ===================== //
@@ -1943,6 +1980,7 @@ function renderWizardStep3(modal){
       <div id="wz_it_catalogRecommend" style="display:none; margin-bottom:10px;"></div>
       <div class="field"><label>제품명</label><input id="wz_it_productName" type="text" autocomplete="off" value="${escapeHtml(wz.draft.productName)}" placeholder="제품 마스터에서 선택하면 자동으로 채워져요"></div>
       <div class="field"><label>제조번호(LOT) *</label><input id="wz_it_lot" type="text" autocomplete="off" value="${escapeHtml(wz.draft.lot)}" placeholder="실물 라벨의 LOT 번호"></div>
+      <div id="wz_it_lotCandidates" style="display:none; margin:-4px 0 10px;"></div>
       <div class="field"><label>유효기간</label><input id="wz_it_expiryDate" type="text" autocomplete="off" value="${escapeHtml(wz.draft.expiryDate)}" placeholder="예: 2028.03 → 자동으로 2028.03.31"></div>
       <div class="field"><label>수량</label><input id="wz_it_quantity" type="text" autocomplete="off" value="${escapeHtml(wz.draft.quantity)}" placeholder="예: 15"></div>
       <div class="field"><label>상태값</label>
@@ -2019,12 +2057,31 @@ function renderWizardStep3(modal){
 
       const combined = wz.draft.photos.map(p=>p.rawText).join('\n');
       let found3 = [];
+      const lotCandidatesEl = document.getElementById('wz_it_lotCandidates');
 
       // 1순위: 제품코드(REF) 라벨 기반 추출
-      // 2순위: LOT/제조번호 라벨 기반 추출 (라벨 못 찾으면 무작위 숫자 넣지 않음)
+      // 2순위: LOT/제조번호 라벨 기반 추출 (라벨 못 찾으면 무작위 숫자 넣지 않음 - 대신 후보 칩으로 제안)
       if(!lotEl.value.trim()){
         const lotGuess = extractLotGuess(combined);
-        if(lotGuess){ lotEl.value = lotGuess; found3.push(`LOT ${lotGuess}`); }
+        if(lotGuess){
+          lotEl.value = lotGuess;
+          found3.push(`LOT ${lotGuess}`);
+          if(lotCandidatesEl){ lotCandidatesEl.style.display = 'none'; lotCandidatesEl.innerHTML = ''; }
+        } else if(lotCandidatesEl){
+          const candidates = extractLotCandidates(combined, codeEl.value.trim());
+          if(candidates.length > 0){
+            lotCandidatesEl.style.display = 'block';
+            lotCandidatesEl.innerHTML = `<div class="hint" style="margin-bottom:4px;">🔎 LOT 라벨을 못 찾았어요 - 사진에서 발견된 후보예요 (탭해서 선택):</div>` +
+              candidates.map((c, i) => `<span class="suggest-item" style="display:inline-block; width:auto; border:1px solid var(--line); border-radius:16px; padding:5px 12px; margin:2px 4px 2px 0;" data-cand="${i}">${escapeHtml(c)}</span>`).join('');
+            lotCandidatesEl.querySelectorAll('[data-cand]').forEach(el=>{
+              el.addEventListener('click', ()=>{
+                lotEl.value = candidates[parseInt(el.dataset.cand, 10)];
+                lotCandidatesEl.style.display = 'none';
+                lotCandidatesEl.innerHTML = '';
+              });
+            });
+          }
+        }
       }
       // 3순위: 유효기간(EXP) 라벨 기반 추출 - 월까지만 있으면 자동으로 그 달 말일로 채움, MFG 날짜는 무시
       if(!expEl.value.trim()){
@@ -2116,6 +2173,32 @@ function renderWzDraftThumbs(){
   wrap.innerHTML = wz.draft.photos.map((p, i) => `
     <div class="photo-thumb"><img src="${p.data}" alt="사진 ${i+1}"><button class="rm" onclick="wzRemoveDraftPhoto(${i})">✕</button></div>
   `).join('');
+}
+
+// LOT 라벨을 아예 못 찾았을 때 - 자동으로 채우지는 않고, 날짜/이미 쓰인 제품코드를 제외한 알파벳+숫자 토큰들을
+// "추천 후보"로 보여줌 (탭하면 채워짐). 확신 없는 값을 자동확정하지 않기 위한 보조 기능.
+function extractLotCandidates(text, excludeCode){
+  if(!text) return [];
+  const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  const dateLike = /^20\d{2}[-.\/]\d{1,2}([-.\/]\d{1,2})?$/;
+  const excludeUp = (excludeCode || '').toUpperCase();
+  const seen = new Set();
+  const candidates = [];
+  for(const line of lines){
+    const matches = line.match(/[A-Za-z0-9]+(?:[-\/.][A-Za-z0-9]+)*/g) || [];
+    for(const m of matches){
+      const clean = m.toUpperCase();
+      const alnumLen = clean.replace(/[-\/.]/g, '').length;
+      if(alnumLen < 5 || alnumLen > 14) continue;
+      if(dateLike.test(m)) continue;
+      if(excludeUp && clean === excludeUp) continue;
+      if(seen.has(clean)) continue;
+      seen.add(clean);
+      candidates.push(clean);
+      if(candidates.length >= 5) return candidates;
+    }
+  }
+  return candidates;
 }
 
 function wzRemoveDraftPhoto(i){
