@@ -228,6 +228,7 @@
   .search-row input{ width:100%; padding:11px 14px 11px 38px; border-radius:10px; border:none; font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:500; background:rgba(255,255,255,.95); color:var(--ink); }
   .search-row input:focus{ outline:2px solid #FFD9B3; outline-offset:1px; }
   .search-icon{ position:absolute; left:13px; top:50%; transform:translateY(-50%); opacity:.5; font-size:14px; }
+  .print-btn{ background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.25); color:#fff; border-radius:9px; cursor:pointer; font-weight:600; }
 
   .tabs{ display:flex; gap:5px; margin-top:12px; }
   .tab{ flex:1; text-align:center; padding:8px 4px; border-radius:8px; font-size:11.5px; font-weight:600; background:rgba(255,255,255,.08); color:#C9D5DF; cursor:pointer; border:1px solid transparent; }
@@ -378,7 +379,6 @@
       <button class="logout-btn" id="masterBtn">🗂 바코드매핑</button>
     </div>
     <div class="stats-row">
-      <div class="stat-chip c-expected">예정 <span class="n" id="expectedCount">-</span></div>
       <div class="stat-chip c-pending">검수대기 <span class="n" id="pendingCount">-</span></div>
       <div class="stat-chip c-confirmed">검수완료 <span class="n" id="confirmedCount">-</span></div>
     </div>
@@ -386,9 +386,9 @@
       <span class="search-icon">🔍</span>
       <input id="searchInput" type="text" placeholder="반품번호, 제품코드, 제품명, LOT 검색" autocomplete="off">
     </div>
+    <button class="print-btn" id="openStartInspect" style="width:100%; margin-top:10px; padding:11px; font-size:13px;">📷 반품번호로 검수 시작 (촬영/입력)</button>
     <div class="tabs" id="tabs">
       <div class="tab active" data-filter="all">📋 전체</div>
-      <div class="tab" data-filter="expected">📋 예정</div>
       <div class="tab" data-filter="pending">⏳ 검수대기</div>
       <div class="tab" data-filter="confirmed">✅ 검수완료</div>
     </div>
@@ -500,7 +500,6 @@ function itemVerifiedQty(it){
 function isExcelItem(it){ return it.expectedQuantity !== undefined && it.expectedQuantity !== null && it.expectedQuantity !== ''; }
 
 function render(){
-  document.getElementById('expectedCount').textContent = records.filter(r => r.status === 'expected').length;
   document.getElementById('pendingCount').textContent = records.filter(r => r.status === 'pending').length;
   document.getElementById('confirmedCount').textContent = records.filter(r => r.status === 'confirmed').length;
 
@@ -2002,6 +2001,231 @@ function groupExcelRowsByReturnNumber(rows){
 
 let excelImportGroups = [];
 
+// ===================== 새 반품 개별등록 (사진 없음 - 반품번호/반품처/품목만 입력, 엑셀등록의 1건 버전) ===================== //
+
+let irItems = [];
+
+async function openIndividualRegisterModal(){
+  closeOverlay('irOverlay');
+  irItems = [];
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'irOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>새 반품 개별등록</h2>
+    <div class="hint" style="margin-bottom:10px;">사진 없이 바로 등록해요. 실물 확인(LOT·유효기간·사진)은 등록 후 "실물검수"에서 진행해요.</div>
+    <div class="field"><label>반품번호 *</label><input id="ir_returnNumber" type="text" autocomplete="off" placeholder="예: 0042933059"></div>
+    <div class="field" style="position:relative;">
+      <label>병원명 / 반품처 (파트너 마스터 검색)</label>
+      <input id="ir_hospitalName" type="text" autocomplete="off" placeholder="코드 또는 이름으로 검색해서 선택 (직접 입력도 가능)">
+      <div id="ir_partnerSuggest" class="suggest-box" style="display:none;"></div>
+    </div>
+
+    <div class="hint" style="margin:14px 0 8px;">📦 품목</div>
+    <div id="ir_itemsList"></div>
+    <div class="item-builder">
+      <div class="item-builder-title">➕ 새 품목 입력</div>
+      <div class="field" style="position:relative;">
+        <label>제품코드 (제품 마스터 검색) *</label>
+        <input id="ir_it_productCode" type="text" autocomplete="off" placeholder="예: F00005444">
+        <div id="ir_it_productSuggest" class="suggest-box" style="display:none;"></div>
+      </div>
+      <div class="field"><label>제품명</label><input id="ir_it_productName" type="text" autocomplete="off" placeholder="제품 마스터에서 선택하면 자동으로 채워져요"></div>
+      <div class="field"><label>예정수량 *</label><input id="ir_it_qty" type="text" autocomplete="off" placeholder="예: 10"></div>
+      <div class="err" id="ir_it_err">제품코드와 예정수량은 필수예요</div>
+      <button class="btn-submit amber" id="ir_addItemBtn" style="width:100%; margin-top:8px;">✓ 이 품목 목록에 추가</button>
+    </div>
+
+    <div class="field" style="margin-top:14px;"><label>메모</label><textarea id="ir_memo" placeholder="특이사항 (선택)"></textarea></div>
+    <div class="field"><label>등록자 *</label><input id="ir_by" type="text" autocomplete="off" placeholder="이름" value="${escapeHtml(myName)}"></div>
+    <div class="err" id="ir_err">반품번호·등록자·품목 1개 이상은 필수예요</div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeOverlay('irOverlay')">취소</button>
+      <button class="btn-submit" id="ir_submitBtn">등록 완료</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('irOverlay'); });
+
+  const hospInput = document.getElementById('ir_hospitalName');
+  const hospSuggest = document.getElementById('ir_partnerSuggest');
+  window.fbListPartnerMaster().then(list => { partnerMasterCache = list; });
+  hospInput.addEventListener('input', ()=> renderSuggestBox(partnerMasterCache, hospInput.value, hospSuggest, hospInput, (item)=> `${item.code} ${item.name}`));
+  hospInput.addEventListener('focus', ()=>{ if(hospInput.value.trim()) renderSuggestBox(partnerMasterCache, hospInput.value, hospSuggest, hospInput, (item)=> `${item.code} ${item.name}`); });
+
+  const codeInput = document.getElementById('ir_it_productCode');
+  const codeSuggest = document.getElementById('ir_it_productSuggest');
+  const nameInput = document.getElementById('ir_it_productName');
+  window.fbListCatalogItems().then(list => { productCatalogCache = list; });
+  codeInput.addEventListener('input', ()=> renderSuggestBox(productCatalogCache, codeInput.value, codeSuggest, codeInput, (item)=> item.code));
+  codeInput.addEventListener('itemselected', (e)=>{ if(e.detail && e.detail.name) nameInput.value = e.detail.name; });
+  codeInput.addEventListener('focus', ()=>{ if(codeInput.value.trim()) renderSuggestBox(productCatalogCache, codeInput.value, codeSuggest, codeInput, (item)=> item.code); });
+
+  document.addEventListener('click', function hideOnOutside(e){
+    if(!hospSuggest.contains(e.target) && e.target !== hospInput){ hospSuggest.style.display = 'none'; }
+    if(!codeSuggest.contains(e.target) && e.target !== codeInput){ codeSuggest.style.display = 'none'; }
+  });
+
+  document.getElementById('ir_addItemBtn').addEventListener('click', ()=>{
+    const productCode = codeInput.value.trim();
+    const productName = nameInput.value.trim();
+    const qty = document.getElementById('ir_it_qty').value.trim();
+    if(!productCode || !qty){ document.getElementById('ir_it_err').style.display = 'block'; return; }
+    document.getElementById('ir_it_err').style.display = 'none';
+    irItems.push({ id: genId(), productCode, productName, expectedQuantity: qty, lots: [] });
+    codeInput.value = ''; nameInput.value = ''; document.getElementById('ir_it_qty').value = '';
+    renderIrItemsList();
+  });
+
+  document.getElementById('ir_submitBtn').addEventListener('click', submitIndividualRegister);
+}
+
+function renderIrItemsList(){
+  const wrap = document.getElementById('ir_itemsList');
+  if(!wrap) return;
+  if(irItems.length === 0){ wrap.innerHTML = ''; return; }
+  wrap.innerHTML = `<div class="hint" style="margin-bottom:8px;">추가된 품목 (${irItems.length}건)</div>` +
+    irItems.map((it,i) => `
+    <div class="item-card">
+      <div class="item-card-top">
+        <div>
+          <div class="it-name">${escapeHtml(it.productName || it.productCode)}</div>
+          <div class="it-lot">${escapeHtml(it.productCode)}</div>
+          <div class="it-meta">예정 ${escapeHtml(String(it.expectedQuantity))}개</div>
+        </div>
+        <div class="it-actions"><button onclick="irRemoveItem(${i})">삭제</button></div>
+      </div>
+    </div>`).join('');
+}
+
+function irRemoveItem(i){ irItems.splice(i,1); renderIrItemsList(); }
+
+async function submitIndividualRegister(){
+  const returnNumber = document.getElementById('ir_returnNumber').value.trim();
+  const hospitalName = document.getElementById('ir_hospitalName').value.trim();
+  const memo = document.getElementById('ir_memo').value.trim();
+  const by = document.getElementById('ir_by').value.trim();
+  if(!returnNumber || !by || irItems.length === 0){ document.getElementById('ir_err').style.display = 'block'; return; }
+  document.getElementById('ir_err').style.display = 'none';
+
+  const btn = document.getElementById('ir_submitBtn');
+  btn.disabled = true; btn.textContent = '등록 중...';
+
+  // 새 제품코드는 제품마스터에 자동 등록 (이름이 있을 때만)
+  const existingCatalog = await window.fbListCatalogItems();
+  const catalogMap = new Map(existingCatalog.map(c=>[c.code, c.name]));
+  for(const it of irItems){
+    if(catalogMap.has(it.productCode)) it.productName = catalogMap.get(it.productCode) || it.productName;
+    else if(it.productCode && it.productName) await window.fbSaveCatalogItem(it.productCode, it.productName, by);
+  }
+
+  const existing = records.find(r => r.returnNumber === returnNumber && r.status !== 'confirmed');
+  if(existing){
+    const its = itemsOf(existing);
+    for(const newIt of irItems){
+      const match = its.find(x => x.productCode === newIt.productCode && isExcelItem(x));
+      if(match){ match.expectedQuantity = newIt.expectedQuantity; }
+      else { its.push(newIt); }
+    }
+    existing.items = its;
+    if(!existing.hospitalName && hospitalName) existing.hospitalName = hospitalName;
+    if(!existing.memo && memo) existing.memo = memo;
+    render();
+    closeOverlay('irOverlay');
+    await window.fbUpdateRecord(existing.id, { items: its, hospitalName: existing.hospitalName, memo: existing.memo });
+    await saveMyName(by);
+    showToast('기존 반품번호에 품목을 추가했어요');
+  } else {
+    const rec = {
+      id: genId(), returnNumber, hospitalName, partnerCode: '',
+      items: irItems, memo, status: 'pending', source: 'manual',
+      registeredBy: by, registeredAt: new Date().toISOString(),
+      confirmedBy: null, confirmedAt: null, confirmMemo: null, photoCount: 0
+    };
+    records.push(rec);
+    render();
+    closeOverlay('irOverlay');
+    await window.fbAddRecord(rec);
+    await saveMyName(by);
+    showToast('반품이 등록됐어요 - 검수대기에서 확인하세요');
+  }
+  btn.disabled = false; btn.textContent = '등록 완료';
+}
+
+// ===================== 반품번호로 검수 시작 (촬영/입력 → 해당 검수대기 건 자동 검색) ===================== //
+
+async function openStartInspectModal(){
+  closeOverlay('startInspectOverlay');
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'startInspectOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>반품번호로 검수 시작</h2>
+    <div class="hint" style="margin-bottom:10px;">등록된 반품번호를 입력하거나, 인수증을 촬영하면 반품번호를 자동으로 인식해서 찾아드려요.</div>
+    <div class="field"><label>반품번호</label><input id="si_returnNumber" type="text" autocomplete="off" placeholder="직접 입력 또는 아래에서 촬영"></div>
+    <div class="capture-zone" id="si_zone">
+      📷 인수증 촬영해서 반품번호 자동 인식 (선택)
+      <input type="file" id="si_input" accept="image/*" style="display:none;">
+    </div>
+    <div id="si_progress" style="display:none;"><div class="ocr-progress">🔄 인식 중...</div></div>
+    <div id="si_resultMsg" style="display:none;"></div>
+    <div class="err" id="si_err">해당 반품번호의 등록 건을 찾지 못했어요 - 먼저 등록해주세요</div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeOverlay('startInspectOverlay')">취소</button>
+      <button class="btn-submit" id="si_findBtn">검수 시작</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('startInspectOverlay'); });
+
+  let capturedReceiptImage = null;
+  const zone = document.getElementById('si_zone');
+  const input = document.getElementById('si_input');
+  zone.addEventListener('click', ()=> input.click());
+  input.addEventListener('change', ()=>{
+    if(!input.files.length) return;
+    const file = input.files[0];
+    const reader = new FileReader();
+    reader.onload = async (e)=>{
+      capturedReceiptImage = e.target.result;
+      zone.innerHTML = `<img src="${capturedReceiptImage}" alt="인수증"><input type="file" id="si_input" accept="image/*" style="display:none;">`;
+      document.getElementById('si_progress').style.display = 'block';
+      const { text, words } = await runReceiptOcr(capturedReceiptImage);
+      document.getElementById('si_progress').style.display = 'none';
+      const found = extractReturnNumberGuess(words, text);
+      const resultEl = document.getElementById('si_resultMsg');
+      resultEl.style.display = 'block';
+      if(found){
+        document.getElementById('si_returnNumber').value = found;
+        resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--green); background:var(--green-bg); padding:8px 10px; border-radius:8px;">✅ 반품번호 ${escapeHtml(found)} 인식됨</div>`;
+      } else {
+        resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--danger); background:#FBEAE8; padding:8px 10px; border-radius:8px;">❌ 인식 안 됨 - 직접 입력해주세요</div>`;
+      }
+    };
+    reader.readAsDataURL(file);
+  });
+
+  document.getElementById('si_findBtn').addEventListener('click', async ()=>{
+    const rn = document.getElementById('si_returnNumber').value.trim();
+    if(!rn){ showToast('반품번호를 입력하거나 촬영해주세요'); return; }
+    const rec = records.find(r => r.returnNumber === rn);
+    if(!rec){
+      document.getElementById('si_err').style.display = 'block';
+      return;
+    }
+    document.getElementById('si_err').style.display = 'none';
+    // 인수증 사진을 촬영했으면 검수기록으로 첨부
+    if(capturedReceiptImage){
+      const c = await compressPhoto(capturedReceiptImage);
+      const pid = await window.fbAddPhoto(rec.id, null, 'receipt', c);
+      if(pid){
+        rec.photoCount = (rec.photoCount || 0) + 1;
+        await window.fbUpdateRecord(rec.id, { photoCount: rec.photoCount });
+      }
+    }
+    closeOverlay('startInspectOverlay');
+    openInspectModal(rec.id);
+  });
+}
+
 async function openExcelImportModal(){
   closeOverlay('excelImportOverlay');
   excelImportGroups = [];
@@ -3159,7 +3383,8 @@ function applyGuestModeUI(){
   }
 }
 
-document.getElementById('openWizard').addEventListener('click', openWizardModal);
+document.getElementById('openWizard').addEventListener('click', openIndividualRegisterModal);
+document.getElementById('openStartInspect').addEventListener('click', openStartInspectModal);
 document.getElementById('openExcelImport').addEventListener('click', openExcelImportModal);
 document.getElementById('masterBtn').addEventListener('click', openMasterModal);
 document.getElementById('partnerBtn').addEventListener('click', openPartnerModal);
