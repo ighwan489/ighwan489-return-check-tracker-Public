@@ -13,6 +13,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Space+Grotesk:wght@700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.0.4/tesseract.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getFirestore, collection, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs, addDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -414,6 +415,11 @@ let isGuestMode = false;
 function showToast(msg){ const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 2200); }
 function genId(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function fmtDate(iso){ if(!iso) return ''; const d = new Date(iso); const pad = n => String(n).padStart(2,'0'); return `${d.getFullYear()}.${pad(d.getMonth()+1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+function elapsedDays(fromIso, toIso){
+  if(!fromIso) return 0;
+  const to = toIso ? new Date(toIso) : new Date();
+  return Math.max(0, Math.floor((to - new Date(fromIso)) / 86400000));
+}
 function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 
 // 파트너 마스터/제품 마스터 검색창 공용 자동완성 드롭다운 - code/name 부분일치로 필터링, 선택하면 입력칸에 채워짐
@@ -522,6 +528,9 @@ function render(){
         <div class="meta-row">
           <span>등록 <b>${escapeHtml(r.registeredBy)}</b></span>
           <span>${fmtDate(r.registeredAt)}</span>
+          ${r.status !== 'confirmed'
+            ? `<span style="color:var(--amber); font-weight:600;">⏱ ${elapsedDays(r.registeredAt)}일 경과</span>`
+            : `<span style="color:var(--green); font-weight:600;">⏱ 등록→완료 ${elapsedDays(r.registeredAt, r.confirmedAt)}일 소요</span>`}
         </div>
         ${its.length > 0 ? `<div class="item-chip-list">
           ${shown.map(it => {
@@ -651,6 +660,7 @@ function renderEditRecordItemsList(recordId){
             <div class="it-meta">예정 ${expected}개 · 확인 ${verified}개 · LOT ${Array.isArray(it.lots) ? it.lots.length : 0}건</div>
           </div>
           <div class="it-actions">
+            <button onclick="openEditExcelItemModal('${recordId}','${it.id}')">수정</button>
             <button onclick="closeOverlay('editRecordOverlay'); openInspectModal('${recordId}')">실물검수</button>
           </div>
         </div>
@@ -1259,6 +1269,66 @@ function extractGtinCandidate(text){
   if(!text) return '';
   const m = text.match(/\d{12,14}/);
   return m ? m[0] : '';
+}
+
+// ===================== 실제 바코드 그래픽 디코딩 (실험적) ===================== //
+// 텍스트OCR 대신 진짜 바코드 스캔 라이브러리로 바코드 자체를 읽음 - GS1-128 바코드는 Code128 방식이라
+// (01)GTIN(10)LOT(17)EXP 전체가 바코드 하나에 다 들어있는 경우가 많음. 디코딩되면 훨씬 정확함.
+function decodeBarcodeFromImage(dataUrl){
+  return new Promise((resolve)=>{
+    if(!window.Quagga){ resolve(null); return; }
+    try{
+      Quagga.decodeSingle({
+        decoder: { readers: ['code_128_reader', 'ean_reader'] },
+        locate: true,
+        src: dataUrl
+      }, function(result){
+        if(result && result.codeResult && result.codeResult.code){
+          resolve(result.codeResult.code);
+        } else {
+          resolve(null);
+        }
+      });
+    }catch(e){ console.warn('바코드 디코딩 실패:', e); resolve(null); }
+  });
+}
+
+// 바코드에서 나온 원시 GS1 문자열(괄호 없이 AI코드+값이 붙어있는 형태)에서 GTIN/LOT/유효기간을 뽑아냄
+// GTIN(14자리 고정)을 먼저 소비하고 나머지에서 순차적으로 AI를 찾음 - 그냥 정규식으로 전체를 훑으면
+// GTIN 숫자 안에서 우연히 "10"이 나와 LOT을 잘못 잡는 문제가 있어서 순차 파싱 방식으로 처리함
+function parseGs1Raw(raw){
+  const result = { gtin: '', lot: '', expiryDate: '' };
+  if(!raw) return result;
+  let s = raw.replace(/[()]/g, ''); // 혹시 괄호가 포함돼 있으면 제거
+  const m01 = s.match(/^0?1(\d{14})/); // 맨앞 "01"(간혹 O/0 오인식 보정)
+  if(m01){
+    result.gtin = m01[1];
+    s = s.slice(s.indexOf(m01[1]) + 14);
+  }
+  let guard = 0;
+  while(s.length > 0 && guard < 50){
+    guard++;
+    if(s.startsWith('17') && /^\d{6}/.test(s.slice(2))){
+      const d = s.slice(2, 8);
+      const yy = parseInt(d.slice(0,2), 10);
+      const yyyy = yy < 70 ? 2000 + yy : 1900 + yy;
+      result.expiryDate = formatExpiryParts(yyyy, parseInt(d.slice(2,4),10), parseInt(d.slice(4,6),10));
+      s = s.slice(8);
+    } else if(s.startsWith('10')){
+      const rest = s.slice(2);
+      const nextAiIdx = rest.search(/17\d{6}/);
+      if(nextAiIdx !== -1){
+        result.lot = rest.slice(0, nextAiIdx);
+        s = rest.slice(nextAiIdx);
+      } else {
+        result.lot = rest;
+        s = '';
+      }
+    } else {
+      s = s.slice(1); // 못 알아본 문자(FNC1 제어문자 등)는 건너뜀
+    }
+  }
+  return result;
 }
 
 // 제품코드: REF/REF NO/REF NO./REF NUMBER/제품코드/제품 코드 라벨을 우선 찾고, 라벨 바로 뒤 또는 다음 줄의 값을 가져옴
@@ -2025,7 +2095,7 @@ async function submitExcelImport(){
     } else {
       const rec = {
         id: genId(), returnNumber: g.returnNumber, hospitalName: g.partnerName || '', partnerCode: g.partnerCode || '',
-        items: g.items, memo: '', status: 'expected', source: 'excel',
+        items: g.items, memo: '', status: 'pending', source: 'excel',
         registeredBy: by, registeredAt: new Date().toISOString(),
         confirmedBy: null, confirmedAt: null, confirmMemo: null, photoCount: 0
       };
@@ -2042,6 +2112,63 @@ async function submitExcelImport(){
 }
 
 // ===================== 실물검수 (엑셀예정 품목에 LOT 실측 추가) ===================== //
+
+// 엑셀 예정등록 품목의 제품코드/제품명/예정수량 수정 - 예정정보가 바뀔 수 있어서 언제든 수정 가능해야 함
+async function openEditExcelItemModal(recordId, itemId){
+  closeOverlay('editExItemOverlay');
+  const rec = records.find(r => r.id === recordId);
+  if(!rec) return;
+  const its = itemsOf(rec);
+  const it = its.find(x => x.id === itemId);
+  if(!it) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'editExItemOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>예정 품목 수정</h2>
+    <div class="field" style="position:relative;">
+      <label>제품코드 (제품 마스터 검색) *</label>
+      <input id="eex_productCode" type="text" autocomplete="off" value="${escapeHtml(it.productCode||'')}">
+      <div id="eex_productSuggest" class="suggest-box" style="display:none;"></div>
+    </div>
+    <div class="field"><label>제품명</label><input id="eex_productName" type="text" autocomplete="off" value="${escapeHtml(it.productName||'')}"></div>
+    <div class="field"><label>예정수량 *</label><input id="eex_qty" type="text" autocomplete="off" value="${escapeHtml(String(it.expectedQuantity||''))}"></div>
+    <div class="hint">이미 확인된 LOT(${Array.isArray(it.lots)?it.lots.length:0}건)은 그대로 유지돼요.</div>
+    <div class="err" id="eex_err">제품코드와 예정수량은 필수예요</div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeOverlay('editExItemOverlay')">취소</button>
+      <button class="btn-submit" id="eex_saveBtn">저장</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('editExItemOverlay'); });
+
+  const codeInput = document.getElementById('eex_productCode');
+  const codeSuggest = document.getElementById('eex_productSuggest');
+  const nameInput = document.getElementById('eex_productName');
+  window.fbListCatalogItems().then(list => { productCatalogCache = list; });
+  codeInput.addEventListener('input', ()=> renderSuggestBox(productCatalogCache, codeInput.value, codeSuggest, codeInput, (item)=> item.code));
+  codeInput.addEventListener('itemselected', (e)=>{ if(e.detail && e.detail.name) nameInput.value = e.detail.name; });
+  codeInput.addEventListener('focus', ()=>{ if(codeInput.value.trim()) renderSuggestBox(productCatalogCache, codeInput.value, codeSuggest, codeInput, (item)=> item.code); });
+  document.addEventListener('click', function hideOnOutside(e){
+    if(!codeSuggest.contains(e.target) && e.target !== codeInput){ codeSuggest.style.display = 'none'; }
+  });
+
+  document.getElementById('eex_saveBtn').addEventListener('click', async ()=>{
+    const productCode = codeInput.value.trim();
+    const qty = document.getElementById('eex_qty').value.trim();
+    if(!productCode || !qty){ document.getElementById('eex_err').style.display = 'block'; return; }
+    const idx = its.findIndex(x => x.id === itemId);
+    its[idx] = { ...it, productCode, productName: nameInput.value.trim(), expectedQuantity: qty };
+    rec.items = its;
+    render();
+    closeOverlay('editExItemOverlay');
+    const ok = await window.fbUpdateRecord(recordId, { items: its });
+    showToast(ok ? '품목이 수정됐어요' : '수정됐지만 저장에 실패했어요');
+    if(document.getElementById('insp_itemsList')) renderInspectItemsList(recordId);
+    if(document.getElementById('er_itemsList')) renderEditRecordItemsList(recordId);
+  });
+}
 
 async function openInspectModal(recordId){
   closeOverlay('inspectOverlay');
@@ -2097,7 +2224,7 @@ function renderInspectItemsList(recordId){
             <div class="it-lot">${escapeHtml(it.productCode)}</div>
             <div class="it-meta">예정 ${expected}개 · 확인 ${verified}개${it.reason ? ' · ' + escapeHtml(it.reason) : ''}</div>
           </div>
-          ${!isGuestMode ? `<div class="it-actions"><button onclick="openAddLotModal('${recordId}','${it.id}')">+ LOT 추가</button></div>` : ''}
+          ${!isGuestMode ? `<div class="it-actions"><button onclick="openEditExcelItemModal('${recordId}','${it.id}')">수정</button><button onclick="openAddLotModal('${recordId}','${it.id}')">+ LOT 추가</button></div>` : ''}
         </div>
         ${lots.length > 0 ? `<div style="margin-top:8px; display:flex; flex-direction:column; gap:6px;">
           ${lots.map(l => {
@@ -2208,8 +2335,38 @@ async function openAddLotModal(recordId, itemId){
       lotDraftPhotos[pidx].rawText = text;
       if(prog) prog.style.display = 'none';
 
+      // 실제 바코드 그래픽 디코딩 시도 (텍스트 OCR보다 훨씬 정확함 - 성공하면 최우선 적용)
+      const barcodeRaw = await decodeBarcodeFromImage(dataUrl);
+      if(lotDraftGen !== myGen) return;
+      let barcodeFound = [];
+      let gs1Result = null;
+      if(barcodeRaw){
+        gs1Result = parseGs1Raw(barcodeRaw);
+        const lotElBc = document.getElementById('al_lot');
+        const expElBc = document.getElementById('al_expiryDate');
+        if(gs1Result.lot && lotElBc && !lotElBc.value.trim()){
+          lotElBc.value = gs1Result.lot;
+          barcodeFound.push(`LOT(바코드스캔) ${gs1Result.lot}`);
+        }
+        if(gs1Result.expiryDate && expElBc && !expElBc.value.trim()){
+          expElBc.value = gs1Result.expiryDate;
+          barcodeFound.push(`유효기간(바코드스캔) ${gs1Result.expiryDate}`);
+        }
+        if(gs1Result.gtin){
+          const masterHit = await window.fbGetProductMaster(gs1Result.gtin.slice(-6));
+          if(lotDraftGen !== myGen) return;
+          if(masterHit && masterHit.productCode){
+            if(normalizeCodeForMatch(masterHit.productCode) === normalizeCodeForMatch(it.productCode)){
+              barcodeFound.push('바코드 제품코드 일치 확인');
+            } else {
+              barcodeFound.push(`⚠️ 바코드 매핑 제품코드(${masterHit.productCode})가 예정 제품코드와 달라요`);
+            }
+          }
+        }
+      }
+
       const combined = lotDraftPhotos.map(p=>p.rawText).join('\n');
-      let found = [];
+      let found = [...barcodeFound];
       const lotEl = document.getElementById('al_lot');
       const expEl = document.getElementById('al_expiryDate');
       if(!lotEl || !expEl) return;
