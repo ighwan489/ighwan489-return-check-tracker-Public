@@ -515,6 +515,7 @@ function render(){
         <div class="photo-badge">🖼 사진 ${(r.photoCount ?? '?')}장</div>
         <div class="card-actions">
           <button class="btn-sm btn-view btn-full-row" onclick="openDetail('${r.id}')">품목·사진 상세 보기</button>
+          ${!isGuestMode ? `<button class="btn-sm btn-edit" onclick="openEditRecordModal('${r.id}')">✏️ 정보 수정</button>` : ''}
           ${(!isGuestMode && r.status === 'pending') ? `<button class="btn-sm btn-confirm" onclick="openConfirmModal('${r.id}')">검수완료 처리</button>` : ''}
           ${!isGuestMode ? `<button class="btn-sm btn-del" onclick="openDeleteConfirm('${r.id}')">삭제</button>` : ''}
         </div>
@@ -543,6 +544,54 @@ function showAppConfirm(message, confirmLabel, onConfirm){
 function closeOverlay(id){ document.querySelectorAll('#' + id).forEach(el => el.remove()); }
 
 // ===================== 검수완료 처리 / 삭제 ===================== //
+
+// ===================== 반품 정보 수정 (반품번호/병원명/메모) - 언제든 수정 가능 ===================== //
+
+async function openEditRecordModal(id){
+  closeOverlay('editRecordOverlay');
+  const rec = records.find(r => r.id === id);
+  if(!rec) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'editRecordOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>반품 정보 수정</h2>
+    <div class="field"><label>반품번호 *</label><input id="er_returnNumber" type="text" autocomplete="off" value="${escapeHtml(rec.returnNumber||'')}"></div>
+    <div class="field" style="position:relative;">
+      <label>병원명 / 반품처 (파트너 마스터 검색)</label>
+      <input id="er_hospitalName" type="text" autocomplete="off" value="${escapeHtml(rec.hospitalName||'')}" placeholder="코드 또는 이름으로 검색해서 선택">
+      <div id="er_partnerSuggest" class="suggest-box" style="display:none;"></div>
+    </div>
+    <div class="field"><label>메모</label><textarea id="er_memo" placeholder="특이사항 (선택)">${escapeHtml(rec.memo||'')}</textarea></div>
+    <div class="err" id="er_err">반품번호를 입력해주세요</div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeOverlay('editRecordOverlay')">취소</button>
+      <button class="btn-submit" id="er_saveBtn">저장</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('editRecordOverlay'); });
+
+  const hospInput = document.getElementById('er_hospitalName');
+  const hospSuggest = document.getElementById('er_partnerSuggest');
+  window.fbListPartnerMaster().then(list => { partnerMasterCache = list; });
+  hospInput.addEventListener('input', ()=> renderSuggestBox(partnerMasterCache, hospInput.value, hospSuggest, hospInput, (item)=> `${item.code} ${item.name}`));
+  hospInput.addEventListener('focus', ()=>{ if(hospInput.value.trim()) renderSuggestBox(partnerMasterCache, hospInput.value, hospSuggest, hospInput, (item)=> `${item.code} ${item.name}`); });
+  document.addEventListener('click', function hideOnOutside(e){
+    if(!hospSuggest.contains(e.target) && e.target !== hospInput){ hospSuggest.style.display = 'none'; }
+  });
+
+  document.getElementById('er_saveBtn').addEventListener('click', async ()=>{
+    const returnNumber = document.getElementById('er_returnNumber').value.trim();
+    const hospitalName = document.getElementById('er_hospitalName').value.trim();
+    const memo = document.getElementById('er_memo').value.trim();
+    if(!returnNumber){ document.getElementById('er_err').style.display = 'block'; return; }
+    Object.assign(rec, { returnNumber, hospitalName, memo });
+    render();
+    closeOverlay('editRecordOverlay');
+    const ok = await window.fbUpdateRecord(id, { returnNumber, hospitalName, memo });
+    showToast(ok ? '수정됐어요' : '수정됐지만 저장에 실패했어요');
+  });
+}
 
 function openConfirmModal(id){
   closeOverlay('confirmOverlay');
@@ -615,6 +664,7 @@ async function openDetail(id){
   overlay.innerHTML = `<div class="modal">
     <h2>${escapeHtml(rec.returnNumber || '반품 상세')}</h2>
     <div class="field"><label>병원명</label><input type="text" value="${escapeHtml(rec.hospitalName||'-')}" disabled></div>
+    ${!isGuestMode ? `<button class="btn-sm btn-edit" style="margin-bottom:10px;" onclick="closeOverlay('detailOverlay'); openEditRecordModal('${id}')">✏️ 반품번호·병원명 수정</button>` : ''}
     <div class="loading" id="detailPhotoLoading">사진 불러오는 중...</div>
     <div id="detailBody" style="display:none;"></div>
     <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('detailOverlay')">닫기</button></div>
@@ -647,7 +697,13 @@ async function openDetail(id){
   its.forEach(it => {
     const itPhotos = photos.filter(p => p.itemId === it.id);
     const st = it.status || 'A';
-    html += `<div class="item-section-title">📦 ${escapeHtml(it.productName || it.productCode || '제품명 미입력')} · LOT ${escapeHtml(it.lot || '-')} <span style="font-size:10.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st] || 'var(--ink-muted)'}; padding:2px 7px; border-radius:10px; margin-left:4px;">${st} · ${ITEM_STATUS_LABEL[st] || st}</span></div>
+    html += `<div class="item-section-title" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px;">
+      <span>📦 ${escapeHtml(it.productName || it.productCode || '제품명 미입력')} · LOT ${escapeHtml(it.lot || '-')} <span style="font-size:10.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st] || 'var(--ink-muted)'}; padding:2px 7px; border-radius:10px; margin-left:4px;">${st} · ${ITEM_STATUS_LABEL[st] || st}</span></span>
+      ${!isGuestMode ? `<span style="display:flex; gap:6px;">
+        <button class="btn-sm btn-edit" onclick="closeOverlay('detailOverlay'); openEditItemModal('${id}','${it.id}')">수정</button>
+        <button class="btn-sm btn-del" onclick="deleteItemFromRecord('${id}','${it.id}')">삭제</button>
+      </span>` : ''}
+    </div>
     <div class="meta-row" style="margin-bottom:8px;">
       ${it.productCode ? `<span>제품코드 <b>${escapeHtml(it.productCode)}</b></span>` : ''}
       ${it.expiryDate ? `<span>유효기간 <b>${escapeHtml(it.expiryDate)}</b></span>` : ''}
@@ -687,6 +743,96 @@ async function deletePhotoFromDetail(recordId, photoId){
   } else {
     showToast('삭제에 실패했어요');
   }
+}
+
+// ===================== 저장된 품목 수정/삭제 - 검수완료 여부와 무관하게 언제든 가능 ===================== //
+
+async function openEditItemModal(recordId, itemId){
+  closeOverlay('editItemOverlay');
+  const rec = records.find(r => r.id === recordId);
+  if(!rec) return;
+  const its = itemsOf(rec);
+  const it = its.find(x => x.id === itemId);
+  if(!it) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'editItemOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>품목 수정</h2>
+    <div class="field" style="position:relative;">
+      <label>제품코드 (제품 마스터 검색)</label>
+      <input id="ei_productCode" type="text" autocomplete="off" value="${escapeHtml(it.productCode||'')}">
+      <div id="ei_productSuggest" class="suggest-box" style="display:none;"></div>
+    </div>
+    <div class="field"><label>제품명</label><input id="ei_productName" type="text" autocomplete="off" value="${escapeHtml(it.productName||'')}"></div>
+    <div class="field"><label>제조번호(LOT) *</label><input id="ei_lot" type="text" autocomplete="off" value="${escapeHtml(it.lot||'')}"></div>
+    <div class="field"><label>유효기간</label><input id="ei_expiryDate" type="text" autocomplete="off" value="${escapeHtml(it.expiryDate||'')}" placeholder="예: 2028.03 → 2028.03.31로 직접 입력"></div>
+    <div class="field"><label>수량</label><input id="ei_quantity" type="text" autocomplete="off" value="${escapeHtml(it.quantity||'')}"></div>
+    <div class="field"><label>상태값</label>
+      <select id="ei_status">
+        ${Object.keys(ITEM_STATUS_LABEL).map(k => `<option value="${k}" ${(it.status||'A') === k ? 'selected' : ''}>${k} · ${ITEM_STATUS_LABEL[k]}</option>`).join('')}
+      </select>
+    </div>
+    <div class="err" id="ei_err">제조번호(LOT)는 필수예요</div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeOverlay('editItemOverlay')">취소</button>
+      <button class="btn-submit" id="ei_saveBtn">저장</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('editItemOverlay'); });
+
+  const codeInput = document.getElementById('ei_productCode');
+  const codeSuggest = document.getElementById('ei_productSuggest');
+  const nameInput = document.getElementById('ei_productName');
+  window.fbListCatalogItems().then(list => { productCatalogCache = list; });
+  codeInput.addEventListener('input', ()=> renderSuggestBox(productCatalogCache, codeInput.value, codeSuggest, codeInput, (item)=> item.code));
+  codeInput.addEventListener('itemselected', (e)=>{ if(e.detail && e.detail.name) nameInput.value = e.detail.name; });
+  codeInput.addEventListener('focus', ()=>{ if(codeInput.value.trim()) renderSuggestBox(productCatalogCache, codeInput.value, codeSuggest, codeInput, (item)=> item.code); });
+  document.addEventListener('click', function hideOnOutside(e){
+    if(!codeSuggest.contains(e.target) && e.target !== codeInput){ codeSuggest.style.display = 'none'; }
+  });
+
+  document.getElementById('ei_saveBtn').addEventListener('click', async ()=>{
+    const lot = document.getElementById('ei_lot').value.trim();
+    if(!lot){ document.getElementById('ei_err').style.display = 'block'; return; }
+    const patch = {
+      productCode: document.getElementById('ei_productCode').value.trim(),
+      productName: document.getElementById('ei_productName').value.trim(),
+      lot,
+      expiryDate: document.getElementById('ei_expiryDate').value.trim(),
+      quantity: document.getElementById('ei_quantity').value.trim(),
+      status: document.getElementById('ei_status').value
+    };
+    const idx = its.findIndex(x => x.id === itemId);
+    its[idx] = { ...it, ...patch };
+    rec.items = its;
+    render();
+    closeOverlay('editItemOverlay');
+    const ok = await window.fbUpdateRecord(recordId, { items: its });
+    showToast(ok ? '품목이 수정됐어요' : '수정됐지만 저장에 실패했어요');
+    openDetail(recordId);
+  });
+}
+
+async function deleteItemFromRecord(recordId, itemId){
+  if(!confirm('이 품목을 삭제할까요? 첨부된 실물사진도 같이 삭제되고, 되돌릴 수 없어요.')) return;
+  const rec = records.find(r => r.id === recordId);
+  if(!rec) return;
+  const its = itemsOf(rec).filter(x => x.id !== itemId);
+  rec.items = its;
+  render();
+  const ok = await window.fbUpdateRecord(recordId, { items: its });
+  // 그 품목에 달려있던 실물사진들도 정리
+  const photos = await window.fbGetPhotos(recordId);
+  const orphanPhotos = photos.filter(p => p.itemId === itemId);
+  for(const p of orphanPhotos){ await window.fbDeletePhoto(p.id); }
+  if(orphanPhotos.length > 0 && typeof rec.photoCount === 'number'){
+    rec.photoCount = Math.max(0, rec.photoCount - orphanPhotos.length);
+    await window.fbUpdateRecord(recordId, { photoCount: rec.photoCount });
+  }
+  showToast(ok ? '품목 삭제 완료' : '삭제됐지만 저장에 일부 실패했어요');
+  openDetail(recordId);
 }
 
 // ===================== OCR / 이미지 유틸 ===================== //
@@ -1003,6 +1149,12 @@ function findValueNearLabel(lines, upperLines, labelUp, matcher){
     if(idx === -1) continue;
     const rest = lines[i].slice(idx + labelUp.length).trim();
     let val = matcher(rest);
+    if(!val){
+      // 라벨보다 값이 앞에 오는 라벨 배치도 있음 (예: "G5UM221 LOT" - 값이 왼쪽, 박스라벨이 오른쪽)
+      // 같은 줄 안의 후보이므로, 완전히 다른 줄로 건너뛰는 것보다 우선순위가 높음
+      const before = lines[i].slice(0, idx).trim();
+      val = matcher(before);
+    }
     if(!val){
       for(let off = 1; off <= 2 && !val; off++){
         if(lines[i + off]) val = matcher(lines[i + off]);
