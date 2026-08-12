@@ -1943,7 +1943,11 @@ function renderWizardStep2(modal){
       }
 
       resultEl.style.display = 'block';
-      resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; background:#F1F3F5; padding:8px 10px; border-radius:8px; margin-top:8px; line-height:1.8;">${numLine}</div>`;
+      resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; background:#F1F3F5; padding:8px 10px; border-radius:8px; margin-top:8px; line-height:1.8;">${numLine}</div>
+        <details style="margin-top:8px;">
+          <summary style="font-size:11.5px; color:var(--ink-muted); cursor:pointer; font-weight:600;">🔍 OCR이 실제로 읽은 텍스트 보기 (디버그용)</summary>
+          <pre style="white-space:pre-wrap; font-size:10.5px; color:var(--ink-muted); background:#F7F8FA; padding:10px; border-radius:8px; margin-top:6px; max-height:180px; overflow-y:auto; font-family:'JetBrains Mono',monospace;">${escapeHtml(text || '(인식된 텍스트 없음)')}</pre>
+        </details>`;
     };
     reader.readAsDataURL(file);
   });
@@ -2139,10 +2143,14 @@ function renderWizardStep3(modal){
       const resultEl3b = document.getElementById('wzDraftResultMsg');
       if(resultEl3b){
         resultEl3b.style.display = 'block';
+        const debugHtml3 = `<details style="margin-top:8px;">
+          <summary style="font-size:11.5px; color:var(--ink-muted); cursor:pointer; font-weight:600;">🔍 OCR이 실제로 읽은 텍스트 보기 (디버그용)</summary>
+          <pre style="white-space:pre-wrap; font-size:10.5px; color:var(--ink-muted); background:#F7F8FA; padding:10px; border-radius:8px; margin-top:6px; max-height:180px; overflow-y:auto; font-family:'JetBrains Mono',monospace;">${escapeHtml(combined || '(인식된 텍스트 없음)')}</pre>
+        </details>`;
         if(found3.length > 0){
-          resultEl3b.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--green); background:var(--green-bg); padding:8px 10px; border-radius:8px; margin-top:8px;">✅ 자동 인식: ${escapeHtml(found3.join(' · '))} - 실물과 대조해서 확인해주세요</div>`;
+          resultEl3b.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--green); background:var(--green-bg); padding:8px 10px; border-radius:8px; margin-top:8px;">✅ 자동 인식: ${escapeHtml(found3.join(' · '))} - 실물과 대조해서 확인해주세요</div>${debugHtml3}`;
         } else {
-          resultEl3b.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--danger); background:#FBEAE8; padding:8px 10px; border-radius:8px; margin-top:8px;">⚠️ 자동 인식되지 않았어요 - 실물 라벨을 보고 직접 입력해주세요</div>`;
+          resultEl3b.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--danger); background:#FBEAE8; padding:8px 10px; border-radius:8px; margin-top:8px;">⚠️ 자동 인식되지 않았어요 - 실물 라벨을 보고 직접 입력해주세요</div>${debugHtml3}`;
         }
       }
       input.value = '';
