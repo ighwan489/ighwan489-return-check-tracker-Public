@@ -15,7 +15,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.0.4/tesseract.min.js"></script>
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import { getFirestore, collection, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs, addDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { getFirestore, collection, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs, addDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { getAuth, signInWithEmailAndPassword, signInAnonymously, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
   // ⚠️ 반품검수기 전용 Firebase 프로젝트입니다 (블락배치와 별도 프로젝트).
@@ -41,6 +41,7 @@
       const recordsCol = collection(db, "returnRecords");
       const photosCol = collection(db, "returnPhotos");
       const masterCol = collection(db, "productMaster"); // 문서 id = 바코드(GTIN) 끝 6자리
+      const partnerCol = collection(db, "partnerMaster"); // 문서 id = 파트너코드
 
       window.fbAddRecord = async function(record){
         try{ await setDoc(doc(recordsCol, record.id), record); return true; }
@@ -105,6 +106,68 @@
       window.fbDeleteProductMaster = async function(key){
         try{ await deleteDoc(doc(masterCol, key)); return true; }
         catch(e){ console.error('마스터 삭제 실패:', e); return false; }
+      };
+
+      // 파트너 마스터: 반품처(거래처) 코드 ↔ 이름 매핑. OCR 대신 여기서 검색/선택해서 반품처를 채움
+      window.fbSavePartnerMaster = async function(code, name, by){
+        try{
+          await setDoc(doc(partnerCol, code), { code, name, updatedBy: by || '', updatedAt: new Date().toISOString() });
+          return true;
+        }catch(e){ console.error('파트너 저장 실패:', e); return false; }
+      };
+      window.fbBulkSavePartnerMaster = async function(records, by){
+        try{
+          const chunkSize = 450;
+          for(let i = 0; i < records.length; i += chunkSize){
+            const chunk = records.slice(i, i + chunkSize);
+            const batch = writeBatch(db);
+            chunk.forEach(r => batch.set(doc(partnerCol, r.code), { code: r.code, name: r.name, updatedBy: by || '', updatedAt: new Date().toISOString() }));
+            await batch.commit();
+          }
+          return true;
+        }catch(e){ console.error('파트너 일괄 저장 실패:', e); return false; }
+      };
+      window.fbListPartnerMaster = async function(){
+        try{
+          const snap = await getDocs(partnerCol);
+          return snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b)=> (a.code||'').localeCompare(b.code||''));
+        }catch(e){ console.error('파트너 목록 조회 실패:', e); return []; }
+      };
+      window.fbDeletePartnerMaster = async function(code){
+        try{ await deleteDoc(doc(partnerCol, code)); return true; }
+        catch(e){ console.error('파트너 삭제 실패:', e); return false; }
+      };
+
+      // 제품 마스터(카탈로그): 제품코드 ↔ 제품명 전체 목록. 파트너 마스터·바코드매핑(productMaster)과 완전 별개 컬렉션.
+      // 문서 id = 제품코드. 품목 등록 시 OCR 후보와 비교해서 추천/검색하는 데 사용.
+      const catalogCol = collection(db, "productCatalog");
+      window.fbSaveCatalogItem = async function(code, name, by){
+        try{
+          await setDoc(doc(catalogCol, code), { code, name, updatedBy: by || '', updatedAt: new Date().toISOString() });
+          return true;
+        }catch(e){ console.error('제품 마스터 저장 실패:', e); return false; }
+      };
+      window.fbBulkSaveCatalogItems = async function(records, by){
+        try{
+          const chunkSize = 450;
+          for(let i = 0; i < records.length; i += chunkSize){
+            const chunk = records.slice(i, i + chunkSize);
+            const batch = writeBatch(db);
+            chunk.forEach(r => batch.set(doc(catalogCol, r.code), { code: r.code, name: r.name, updatedBy: by || '', updatedAt: new Date().toISOString() }));
+            await batch.commit();
+          }
+          return true;
+        }catch(e){ console.error('제품 마스터 일괄 저장 실패:', e); return false; }
+      };
+      window.fbListCatalogItems = async function(){
+        try{
+          const snap = await getDocs(catalogCol);
+          return snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b)=> (a.code||'').localeCompare(b.code||''));
+        }catch(e){ console.error('제품 마스터 목록 조회 실패:', e); return []; }
+      };
+      window.fbDeleteCatalogItem = async function(code){
+        try{ await deleteDoc(doc(catalogCol, code)); return true; }
+        catch(e){ console.error('제품 마스터 삭제 실패:', e); return false; }
       };
 
       const auth = getAuth(app);
@@ -260,6 +323,18 @@
   .btn-submit.amber{ background:var(--amber); }
   .btn-submit:disabled{ opacity:.5; cursor:not-allowed; }
   .err{ color:var(--danger); font-size:12px; margin-top:6px; display:none; }
+  .preview-table{ width:100%; border-collapse:collapse; font-size:12px; margin-top:10px; }
+  .preview-table th{ text-align:left; font-size:10.5px; color:var(--ink-muted); font-weight:600; padding:4px 6px; border-bottom:1px solid var(--line); }
+  .preview-table td{ padding:6px 6px; border-bottom:1px solid #EEF1F4; vertical-align:top; }
+  .preview-table tr.invalid td{ color:var(--danger); }
+  .preview-table td.chk{ width:22px; }
+  .preview-summary{ font-size:12px; color:var(--ink-muted); margin-top:8px; }
+  .preview-summary b{ color:var(--steel-dark); }
+  .preview-wrap{ max-height:260px; overflow-y:auto; border:1px solid var(--line); border-radius:8px; padding:0 8px; }
+  .suggest-box{ position:absolute; left:0; right:0; top:100%; z-index:5; background:#fff; border:1px solid var(--line); border-radius:8px; margin-top:4px; max-height:220px; overflow-y:auto; box-shadow:0 4px 12px rgba(0,0,0,.12); }
+  .suggest-item{ padding:9px 12px; font-size:13px; cursor:pointer; border-bottom:1px solid var(--line); }
+  .suggest-item:last-child{ border-bottom:none; }
+  .suggest-item:hover{ background:#F1F3F5; }
 
   .toast{ position:fixed; top:16px; left:50%; transform:translateX(-50%); z-index:50; background:var(--steel-dark); color:#fff; padding:10px 18px; border-radius:20px; font-size:13px; font-weight:600; box-shadow:0 4px 12px rgba(0,0,0,.2); opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; }
   .toast.show{ opacity:1; transform:translateX(-50%) translateY(6px); }
@@ -285,7 +360,9 @@
         <h1>📦 반품검수기</h1>
         <div class="subtitle" id="subtitle">반품인수증 · 실물 대조 검수 관리</div>
       </div>
-      <button class="logout-btn" id="masterBtn" style="margin-right:6px;">🗂 마스터</button>
+      <button class="logout-btn" id="partnerBtn" style="margin-right:6px;">🏢 파트너</button>
+      <button class="logout-btn" id="productCatalogBtn" style="margin-right:6px;">📦 제품마스터</button>
+      <button class="logout-btn" id="masterBtn" style="margin-right:6px;">🗂 바코드매핑</button>
       <button class="logout-btn" id="logoutBtn">로그아웃</button>
     </div>
     <div class="stats-row">
@@ -324,6 +401,31 @@ function showToast(msg){ const t = document.getElementById('toast'); t.textConte
 function genId(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function fmtDate(iso){ if(!iso) return ''; const d = new Date(iso); const pad = n => String(n).padStart(2,'0'); return `${d.getFullYear()}.${pad(d.getMonth()+1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+// 파트너 마스터/제품 마스터 검색창 공용 자동완성 드롭다운 - code/name 부분일치로 필터링, 선택하면 입력칸에 채워짐
+function renderSuggestBox(list, query, container, inputEl, displayFn){
+  const q = query.trim().toLowerCase();
+  if(!q){ container.style.display = 'none'; container.innerHTML = ''; return; }
+  const matches = (list || []).filter(item =>
+    (item.code || '').toLowerCase().includes(q) || (item.name || '').toLowerCase().includes(q)
+  ).slice(0, 8);
+  if(matches.length === 0){
+    container.style.display = 'block';
+    container.innerHTML = `<div class="suggest-item" style="color:var(--ink-muted); cursor:default;">일치하는 항목이 없어요</div>`;
+    return;
+  }
+  container.style.display = 'block';
+  container.innerHTML = matches.map((item, i) => `<div class="suggest-item" data-idx="${i}">${escapeHtml(item.code)} · ${escapeHtml(item.name)}</div>`).join('');
+  container.querySelectorAll('.suggest-item[data-idx]').forEach((el)=>{
+    el.addEventListener('click', ()=>{
+      const item = matches[parseInt(el.dataset.idx, 10)];
+      inputEl.value = displayFn(item);
+      container.style.display = 'none';
+      container.innerHTML = '';
+      inputEl.dispatchEvent(new CustomEvent('itemselected', { detail: item }));
+    });
+  });
+}
 
 function loadMyName(){ try{ const v = localStorage.getItem('returnCheck_myName'); if(v) myName = v; }catch(e){} }
 function saveMyName(name){ myName = name; try{ localStorage.setItem('returnCheck_myName', name); }catch(e){} }
@@ -986,6 +1088,250 @@ function extractExpiryGuess(text){
   return '';
 }
 
+// ===================== 제품 마스터(카탈로그) 유사도 매칭 ===================== //
+// OCR로 읽은 제품코드 후보를 제품 마스터 전체와 비교해서 정확일치/유사후보를 찾음.
+// 대소문자·공백·하이픈 차이는 무시하고, 그래도 다르면 편집거리로 유사도를 계산함 (숫자/영문 OCR 혼동 보정 포함).
+
+// 제품코드 정규화 - 비교용으로만 사용 (원래 표기는 그대로 유지)
+function normalizeCodeForMatch(s){
+  if(!s) return '';
+  return s.toString().toUpperCase().replace(/[\s\-_.\/]/g, '')
+    .replace(/O/g, '0').replace(/I/g, '1').replace(/L/g, '1').replace(/S/g, '5').replace(/B/g, '8'); // 흔한 OCR 혼동 문자 보정
+}
+
+// 카탈로그 전체에서 OCR 후보 코드와 가장 비슷한 항목들을 찾아 점수순으로 반환
+// 반환: [{code, name, score}] - score 0이면 정확일치, 클수록 덜 비슷함. limit개까지.
+function findCatalogMatches(catalog, candidateCode, limit){
+  if(!catalog || catalog.length === 0 || !candidateCode) return [];
+  const normCandidate = normalizeCodeForMatch(candidateCode);
+  if(!normCandidate) return [];
+  const scored = catalog.map(item => {
+    const normItem = normalizeCodeForMatch(item.code);
+    let score;
+    if(normItem === normCandidate) score = 0;
+    else score = levenshtein(normItem, normCandidate);
+    return { code: item.code, name: item.name, score };
+  });
+  return scored
+    .filter(s => s.score <= 3) // 너무 다른 건 후보에서 제외 (오탐 방지)
+    .sort((a,b) => a.score - b.score)
+    .slice(0, limit || 5);
+}
+
+// 제품명 텍스트(OCR 전체 텍스트)에서 카탈로그 제품명과 겹치는 단어가 있는 항목을 찾음 (코드 후보가 아예 없을 때 보조용)
+function findCatalogMatchesByName(catalog, ocrText, limit){
+  if(!catalog || catalog.length === 0 || !ocrText) return [];
+  const upper = ocrText.toUpperCase();
+  const scored = [];
+  for(const item of catalog){
+    if(!item.name) continue;
+    const nameUp = item.name.toUpperCase();
+    // 제품명에서 3자 이상인 토큰들이 OCR 텍스트에 포함되는지 확인
+    const tokens = nameUp.split(/[^A-Z0-9가-힣]+/).filter(t => t.length >= 3);
+    const hitCount = tokens.filter(t => upper.includes(t)).length;
+    if(hitCount > 0) scored.push({ code: item.code, name: item.name, score: -hitCount }); // 많이 겹칠수록 우선(score 작을수록 우선)
+  }
+  return scored.sort((a,b) => a.score - b.score).slice(0, limit || 5);
+}
+
+// ===================== 제품 마스터(카탈로그) 관리 - 파트너 마스터와 완전 별개 (개별/일괄 등록, 검색) ===================== //
+
+let productCatalogCache = []; // Step3 검색/추천용 캐시
+let catalogBulkRows = [];
+let pcMode = 'single';
+
+async function openProductCatalogModal(){
+  closeOverlay('catalogOverlay');
+  pcMode = 'single';
+  catalogBulkRows = [];
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'catalogOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>제품 마스터 관리</h2>
+    <div class="hint" style="margin-bottom:10px;">제품코드·제품명 전체 목록이에요. 파트너 마스터와는 완전히 별개 데이터예요. 품목 등록 시 여기서 검색하거나, OCR 후보와 자동으로 비교해서 추천해줘요.</div>
+
+    <div class="field" style="position:relative;">
+      <label>빠른 검색</label>
+      <input id="pc_search" type="text" autocomplete="off" placeholder="제품코드 또는 제품명으로 검색 (예: G5UM221, TIGI)">
+    </div>
+
+    <div class="seg" id="pcModeSeg">
+      <button type="button" class="seg-btn active st-blocked" data-v="single">개별 등록</button>
+      <button type="button" class="seg-btn st-testing" data-v="bulk">일괄 등록 (엑셀 붙여넣기)</button>
+    </div>
+
+    <div id="pcSingleArea">
+      <div class="field"><label>제품코드 *</label><input id="pc_code" type="text" autocomplete="off" placeholder="예: G5UM221"></div>
+      <div class="field"><label>제품명 *</label><input id="pc_name" type="text" autocomplete="off" placeholder="예: Fresenius Bloodline"></div>
+      <div class="err" id="pc_err">제품코드와 제품명을 모두 입력해주세요</div>
+      <button class="btn-submit" id="pc_addBtn" style="width:100%;">추가 / 수정</button>
+    </div>
+
+    <div id="pcBulkArea" style="display:none;">
+      <div class="field">
+        <label>엑셀에서 복사해서 붙여넣기</label>
+        <textarea id="pcPasteBox" style="min-height:140px;" placeholder="140006	[03718]TIGI Bed Head A Hai...
+140006B	[03718]TIGI Bed Head A Hai...
+140094	[40094]TIGI Bed Head After..."></textarea>
+        <div class="hint">열 순서: <code>제품코드</code> · <code>제품명</code> — 엑셀 표를 그대로 드래그해서 복사·붙여넣기 하면 돼요. 첫 줄이 헤더여도 자동으로 인식하고, 이미 있는 코드는 덮어써서 업데이트돼요.</div>
+      </div>
+      <button class="btn-submit" id="pcParseBtn" style="width:100%;">미리보기</button>
+      <div id="pcBulkPreviewWrap" style="display:none; margin-top:12px;">
+        <div class="preview-summary" id="pcPreviewSummary"></div>
+        <div class="preview-wrap"><table class="preview-table" id="pcPreviewTable"></table></div>
+        <button class="btn-submit" id="pcBulkSubmitBtn" style="width:100%; margin-top:10px;">일괄 등록</button>
+      </div>
+    </div>
+
+    <div class="loading" id="pc_loading" style="padding:24px 0;">불러오는 중...</div>
+    <div id="pc_list" style="display:none; margin-top:14px;"></div>
+    <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('catalogOverlay')">닫기</button></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('catalogOverlay'); });
+
+  document.getElementById('pc_search').addEventListener('input', (e)=> renderCatalogList(e.target.value));
+
+  overlay.querySelectorAll('#pcModeSeg .seg-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      overlay.querySelectorAll('#pcModeSeg .seg-btn').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      pcMode = btn.dataset.v;
+      document.getElementById('pcSingleArea').style.display = pcMode === 'single' ? 'block' : 'none';
+      document.getElementById('pcBulkArea').style.display = pcMode === 'bulk' ? 'block' : 'none';
+    });
+  });
+
+  document.getElementById('pc_addBtn').addEventListener('click', async ()=>{
+    const code = document.getElementById('pc_code').value.trim();
+    const name = document.getElementById('pc_name').value.trim();
+    if(!code || !name){ document.getElementById('pc_err').style.display = 'block'; return; }
+    document.getElementById('pc_err').style.display = 'none';
+    const ok = await window.fbSaveCatalogItem(code, name, myName);
+    showToast(ok ? '제품이 등록됐어요' : '등록에 실패했어요');
+    if(ok){
+      document.getElementById('pc_code').value = '';
+      document.getElementById('pc_name').value = '';
+      loadCatalogList();
+    }
+  });
+
+  document.getElementById('pcParseBtn').addEventListener('click', ()=>{
+    const text = document.getElementById('pcPasteBox').value;
+    catalogBulkRows = parseCatalogText(text);
+    renderCatalogPreview();
+    document.getElementById('pcBulkPreviewWrap').style.display = 'block';
+  });
+
+  document.getElementById('pcBulkSubmitBtn').addEventListener('click', async ()=>{
+    const toAdd = catalogBulkRows.filter(r => r.valid && r.include);
+    if(toAdd.length === 0){ showToast('등록할 유효한 행이 없어요'); return; }
+    const btn = document.getElementById('pcBulkSubmitBtn');
+    btn.disabled = true; btn.textContent = '등록 중...';
+    const ok = await window.fbBulkSaveCatalogItems(toAdd, myName);
+    btn.disabled = false; btn.textContent = '일괄 등록';
+    showToast(ok ? `${toAdd.length}건 일괄 등록 완료` : '일부 등록에 실패했어요');
+    if(ok){
+      document.getElementById('pcPasteBox').value = '';
+      document.getElementById('pcBulkPreviewWrap').style.display = 'none';
+      catalogBulkRows = [];
+      loadCatalogList();
+    }
+  });
+
+  loadCatalogList();
+}
+
+function parseCatalogText(text){
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+  if(lines.length === 0) return [];
+  let dataLines = lines;
+  const firstCols = lines[0].split(/\t|,/).map(c => c.trim());
+  if(firstCols.join(' ').includes('제품코드') || firstCols.join(' ').includes('제품명')) dataLines = lines.slice(1);
+  return dataLines.map(line => {
+    const cols = line.split('\t').length > 1 ? line.split('\t') : line.split(',');
+    const code = (cols[0] || '').trim();
+    const name = (cols[1] || '').trim();
+    const valid = !!code && !!name;
+    return { code, name, valid, include: valid };
+  });
+}
+
+function renderCatalogPreview(){
+  const validCount = catalogBulkRows.filter(r => r.valid).length;
+  document.getElementById('pcPreviewSummary').innerHTML =
+    `총 <b>${catalogBulkRows.length}</b>행 인식 · 유효 <b>${validCount}</b>건${catalogBulkRows.length - validCount > 0 ? ` · 코드/이름 누락 ${catalogBulkRows.length - validCount}건은 제외됐어요` : ''}`;
+  const table = document.getElementById('pcPreviewTable');
+  table.innerHTML = `
+    <thead><tr><th></th><th>제품코드</th><th>제품명</th></tr></thead>
+    <tbody>
+      ${catalogBulkRows.map((r, i) => `
+        <tr class="${r.valid ? '' : 'invalid'}">
+          <td class="chk"><input type="checkbox" ${r.include ? 'checked' : ''} ${r.valid ? '' : 'disabled'} onchange="catalogBulkRows[${i}].include=this.checked"></td>
+          <td>${escapeHtml(r.code) || '-'}</td>
+          <td>${escapeHtml(r.name) || '-'}</td>
+        </tr>`).join('')}
+    </tbody>`;
+}
+
+async function loadCatalogList(){
+  const loading = document.getElementById('pc_loading');
+  const listEl = document.getElementById('pc_list');
+  if(!loading || !listEl) return;
+  loading.style.display = 'block';
+  listEl.style.display = 'none';
+  const items = await window.fbListCatalogItems();
+  productCatalogCache = items;
+  loading.style.display = 'none';
+  listEl.style.display = 'block';
+  renderCatalogList('');
+}
+
+function renderCatalogList(filterText){
+  const listEl = document.getElementById('pc_list');
+  if(!listEl) return;
+  const q = (filterText || '').trim().toLowerCase();
+  const items = q
+    ? productCatalogCache.filter(it => (it.code||'').toLowerCase().includes(q) || (it.name||'').toLowerCase().includes(q))
+    : productCatalogCache;
+  if(productCatalogCache.length === 0){
+    listEl.innerHTML = `<div class="hint" style="text-align:center; padding:12px 0;">등록된 제품이 없어요</div>`;
+    return;
+  }
+  if(items.length === 0){
+    listEl.innerHTML = `<div class="hint" style="text-align:center; padding:12px 0;">검색 결과가 없어요</div>`;
+    return;
+  }
+  const shown = items.slice(0, 50);
+  listEl.innerHTML = `<div class="hint" style="margin-bottom:8px;">${q ? `검색 결과 ${items.length}건` : `전체 ${items.length}건`}${items.length > 50 ? ' · 최근 50건만 표시 (검색해서 좁혀보세요)' : ''}</div>` +
+    shown.map(it => `
+    <div class="item-card">
+      <div class="item-card-top">
+        <div>
+          <div class="it-lot">${escapeHtml(it.code)}</div>
+          <div class="it-name">${escapeHtml(it.name)}</div>
+        </div>
+        <div class="it-actions">
+          <button onclick="editCatalogEntry('${escapeHtml(it.code)}','${escapeHtml(it.name)}')">수정</button>
+          <button onclick="deleteCatalogEntry('${escapeHtml(it.code)}')">삭제</button>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function editCatalogEntry(code, name){
+  document.querySelector('#pcModeSeg .seg-btn[data-v="single"]').click();
+  document.getElementById('pc_code').value = code;
+  document.getElementById('pc_name').value = name;
+}
+
+async function deleteCatalogEntry(code){
+  if(!confirm(`제품 "${code}"를 삭제할까요?`)) return;
+  const ok = await window.fbDeleteCatalogItem(code);
+  showToast(ok ? '삭제됐어요' : '삭제에 실패했어요');
+  loadCatalogList();
+}
+
 // ===================== 제품코드 마스터 관리 (바코드 끝 6자리 ↔ 제품코드) ===================== //
 
 async function openMasterModal(){
@@ -1066,6 +1412,181 @@ async function deleteMasterEntry(key){
   const ok = await window.fbDeleteProductMaster(key);
   showToast(ok ? '삭제됐어요' : '삭제에 실패했어요');
   loadMasterList();
+}
+
+// ===================== 파트너 마스터 관리 (거래처 코드 ↔ 이름, 개별/일괄 등록) ===================== //
+
+let partnerBulkRows = []; // {code, name, valid, include}
+let pmMode = 'single';
+let partnerMasterCache = []; // Step2 검색용 캐시
+
+async function openPartnerModal(){
+  closeOverlay('partnerOverlay');
+  pmMode = 'single';
+  partnerBulkRows = [];
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'partnerOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>파트너 마스터 관리</h2>
+    <div class="hint" style="margin-bottom:10px;">반품처(거래처) 코드와 이름을 미리 등록해두면, 반품 등록 2단계에서 검색해서 바로 선택할 수 있어요. OCR로 반품처를 읽지 않고 여기서 관리하는 목록으로만 채워요.</div>
+
+    <div class="seg" id="pmModeSeg">
+      <button type="button" class="seg-btn active st-blocked" data-v="single">개별 등록</button>
+      <button type="button" class="seg-btn st-testing" data-v="bulk">일괄 등록 (엑셀 붙여넣기)</button>
+    </div>
+
+    <div id="pmSingleArea">
+      <div class="field"><label>파트너코드 *</label><input id="pm_code" type="text" autocomplete="off" placeholder="예: 0000800002"></div>
+      <div class="field"><label>파트너명 *</label><input id="pm_name" type="text" autocomplete="off" placeholder="예: 동국약품상사(주)"></div>
+      <div class="err" id="pm_err">파트너코드와 파트너명을 모두 입력해주세요</div>
+      <button class="btn-submit" id="pm_addBtn" style="width:100%;">추가 / 수정</button>
+    </div>
+
+    <div id="pmBulkArea" style="display:none;">
+      <div class="field">
+        <label>엑셀에서 복사해서 붙여넣기</label>
+        <textarea id="pmPasteBox" style="min-height:140px;" placeholder="0000800002	동국약품상사(주)
+0000800003	(주)엠디오(MTO)
+0000800006	(주)삼원약품"></textarea>
+        <div class="hint">열 순서: <code>파트너코드</code> · <code>파트너명</code> — 엑셀 표를 그대로 드래그해서 복사·붙여넣기 하면 돼요. 첫 줄이 헤더여도 자동으로 인식해요.</div>
+      </div>
+      <button class="btn-submit" id="pmParseBtn" style="width:100%;">미리보기</button>
+      <div id="pmBulkPreviewWrap" style="display:none; margin-top:12px;">
+        <div class="preview-summary" id="pmPreviewSummary"></div>
+        <div class="preview-wrap"><table class="preview-table" id="pmPreviewTable"></table></div>
+        <button class="btn-submit" id="pmBulkSubmitBtn" style="width:100%; margin-top:10px;">일괄 등록</button>
+      </div>
+    </div>
+
+    <div class="loading" id="pm_loading" style="padding:24px 0;">불러오는 중...</div>
+    <div id="pm_list" style="display:none; margin-top:14px;"></div>
+    <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('partnerOverlay')">닫기</button></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('partnerOverlay'); });
+
+  overlay.querySelectorAll('#pmModeSeg .seg-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      overlay.querySelectorAll('#pmModeSeg .seg-btn').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      pmMode = btn.dataset.v;
+      document.getElementById('pmSingleArea').style.display = pmMode === 'single' ? 'block' : 'none';
+      document.getElementById('pmBulkArea').style.display = pmMode === 'bulk' ? 'block' : 'none';
+    });
+  });
+
+  document.getElementById('pm_addBtn').addEventListener('click', async ()=>{
+    const code = document.getElementById('pm_code').value.trim();
+    const name = document.getElementById('pm_name').value.trim();
+    if(!code || !name){ document.getElementById('pm_err').style.display = 'block'; return; }
+    document.getElementById('pm_err').style.display = 'none';
+    const ok = await window.fbSavePartnerMaster(code, name, myName);
+    showToast(ok ? '파트너가 등록됐어요' : '등록에 실패했어요');
+    if(ok){
+      document.getElementById('pm_code').value = '';
+      document.getElementById('pm_name').value = '';
+      loadPartnerList();
+    }
+  });
+
+  document.getElementById('pmParseBtn').addEventListener('click', ()=>{
+    const text = document.getElementById('pmPasteBox').value;
+    partnerBulkRows = parsePartnerText(text);
+    renderPartnerPreview();
+    document.getElementById('pmBulkPreviewWrap').style.display = 'block';
+  });
+
+  document.getElementById('pmBulkSubmitBtn').addEventListener('click', async ()=>{
+    const toAdd = partnerBulkRows.filter(r => r.valid && r.include);
+    if(toAdd.length === 0){ showToast('등록할 유효한 행이 없어요'); return; }
+    const btn = document.getElementById('pmBulkSubmitBtn');
+    btn.disabled = true; btn.textContent = '등록 중...';
+    const ok = await window.fbBulkSavePartnerMaster(toAdd, myName);
+    btn.disabled = false; btn.textContent = '일괄 등록';
+    showToast(ok ? `${toAdd.length}건 일괄 등록 완료` : '일부 등록에 실패했어요');
+    if(ok){
+      document.getElementById('pmPasteBox').value = '';
+      document.getElementById('pmBulkPreviewWrap').style.display = 'none';
+      partnerBulkRows = [];
+      loadPartnerList();
+    }
+  });
+
+  loadPartnerList();
+}
+
+function parsePartnerText(text){
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+  if(lines.length === 0) return [];
+  let dataLines = lines;
+  const firstCols = lines[0].split(/\t|,/).map(c => c.trim());
+  if(firstCols.join(' ').includes('파트너')) dataLines = lines.slice(1); // 헤더행 자동 스킵
+  return dataLines.map(line => {
+    const cols = line.split('\t').length > 1 ? line.split('\t') : line.split(',');
+    const code = (cols[0] || '').trim();
+    const name = (cols[1] || '').trim();
+    const valid = !!code && !!name;
+    return { code, name, valid, include: valid };
+  });
+}
+
+function renderPartnerPreview(){
+  const validCount = partnerBulkRows.filter(r => r.valid).length;
+  document.getElementById('pmPreviewSummary').innerHTML =
+    `총 <b>${partnerBulkRows.length}</b>행 인식 · 유효 <b>${validCount}</b>건${partnerBulkRows.length - validCount > 0 ? ` · 코드/이름 누락 ${partnerBulkRows.length - validCount}건은 제외됐어요` : ''}`;
+  const table = document.getElementById('pmPreviewTable');
+  table.innerHTML = `
+    <thead><tr><th></th><th>파트너코드</th><th>파트너명</th></tr></thead>
+    <tbody>
+      ${partnerBulkRows.map((r, i) => `
+        <tr class="${r.valid ? '' : 'invalid'}">
+          <td class="chk"><input type="checkbox" ${r.include ? 'checked' : ''} ${r.valid ? '' : 'disabled'} onchange="partnerBulkRows[${i}].include=this.checked"></td>
+          <td>${escapeHtml(r.code) || '-'}</td>
+          <td>${escapeHtml(r.name) || '-'}</td>
+        </tr>`).join('')}
+    </tbody>`;
+}
+
+async function loadPartnerList(){
+  const loading = document.getElementById('pm_loading');
+  const listEl = document.getElementById('pm_list');
+  if(!loading || !listEl) return;
+  loading.style.display = 'block';
+  listEl.style.display = 'none';
+  const items = await window.fbListPartnerMaster();
+  partnerMasterCache = items;
+  loading.style.display = 'none';
+  listEl.style.display = 'block';
+  if(items.length === 0){
+    listEl.innerHTML = `<div class="hint" style="text-align:center; padding:12px 0;">등록된 파트너가 없어요</div>`;
+    return;
+  }
+  listEl.innerHTML = `<div class="hint" style="margin-bottom:8px;">등록된 파트너 (${items.length}건)</div>` + items.map(it => `
+    <div class="item-card">
+      <div class="item-card-top">
+        <div>
+          <div class="it-lot">${escapeHtml(it.code)}</div>
+          <div class="it-name">${escapeHtml(it.name)}</div>
+        </div>
+        <div class="it-actions">
+          <button onclick="editPartnerEntry('${escapeHtml(it.code)}','${escapeHtml(it.name)}')">수정</button>
+          <button onclick="deletePartnerEntry('${escapeHtml(it.code)}')">삭제</button>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function editPartnerEntry(code, name){
+  document.querySelector('#pmModeSeg .seg-btn[data-v="single"]').click();
+  document.getElementById('pm_code').value = code;
+  document.getElementById('pm_name').value = name;
+}
+
+async function deletePartnerEntry(code){
+  if(!confirm(`파트너 "${code}"를 삭제할까요?`)) return;
+  const ok = await window.fbDeletePartnerMaster(code);
+  showToast(ok ? '삭제됐어요' : '삭제에 실패했어요');
+  loadPartnerList();
 }
 
 // ===================== 등록 마법사 (4단계, 3단계=품목 반복 추가) ===================== //
@@ -1158,11 +1679,15 @@ function renderWizardStep2(modal){
   modal.innerHTML = `
     <h2>새 반품 등록</h2>
     ${wizardStepsBarHtml()}
-    <div class="hint" style="margin-bottom:10px;">1번에서 인식된 정보를 확인·수정해주세요. 아래에서 반품번호·반품처 부분만 확대 촬영하면 인식 정확도가 크게 올라가요 (선택이지만 강력 추천).</div>
+    <div class="hint" style="margin-bottom:10px;">1번에서 인식된 정보를 확인·수정해주세요. 아래에서 반품번호 부분만 확대 촬영하면 인식 정확도가 크게 올라가요 (선택이지만 강력 추천).</div>
     <div class="field"><label>반품번호 *</label><input id="wz_returnNumber" type="text" autocomplete="off" value="${escapeHtml(wz.returnNumber)}" placeholder="예: 0042933059"></div>
-    <div class="field"><label>병원명 / 반품처</label><input id="wz_hospitalName" type="text" autocomplete="off" value="${escapeHtml(wz.hospitalName)}"></div>
+    <div class="field" style="position:relative;">
+      <label>병원명 / 반품처 (파트너 마스터 검색)</label>
+      <input id="wz_hospitalName" type="text" autocomplete="off" value="${escapeHtml(wz.hospitalName)}" placeholder="코드 또는 이름으로 검색해서 선택 (직접 입력도 가능)">
+      <div id="wz_partnerSuggest" class="suggest-box" style="display:none;"></div>
+    </div>
 
-    <div class="hint" style="margin:14px 0 6px;">📷 반품번호 · 반품처 부분 확대 촬영 (선택 · 정확도 향상용)</div>
+    <div class="hint" style="margin:14px 0 6px;">📷 반품번호 부분 확대 촬영 (선택 · 정확도 향상용)</div>
     <div class="capture-zone" id="wzZoomZone">
       📷 눌러서 촬영 또는 앨범에서 선택 (건너뛰기 가능)
       <input type="file" id="wzZoomInput" accept="image/*">
@@ -1176,6 +1701,20 @@ function renderWizardStep2(modal){
       <button class="btn-submit" id="wz2NextBtn">다음 단계</button>
     </div>`;
 
+  // 파트너 마스터 검색 - 코드/이름으로 필터링해서 선택 (OCR로 반품처를 읽지 않음)
+  const hospInput = document.getElementById('wz_hospitalName');
+  const hospSuggest = document.getElementById('wz_partnerSuggest');
+  window.fbListPartnerMaster().then(list => { partnerMasterCache = list; });
+  hospInput.addEventListener('input', ()=>{
+    renderSuggestBox(partnerMasterCache, hospInput.value, hospSuggest, hospInput, (item)=> `${item.code} ${item.name}`);
+  });
+  hospInput.addEventListener('focus', ()=>{
+    if(hospInput.value.trim()) renderSuggestBox(partnerMasterCache, hospInput.value, hospSuggest, hospInput, (item)=> `${item.code} ${item.name}`);
+  });
+  document.addEventListener('click', function hideOnOutside(e){
+    if(!hospSuggest.contains(e.target) && e.target !== hospInput){ hospSuggest.style.display = 'none'; }
+  });
+
   const zone = document.getElementById('wzZoomZone');
   const input = document.getElementById('wzZoomInput');
   zone.addEventListener('click', ()=> input.click());
@@ -1185,18 +1724,17 @@ function renderWizardStep2(modal){
     const reader = new FileReader();
     reader.onload = async (e)=>{
       wz.zoomImage = e.target.result;
-      zone.innerHTML = `<img src="${wz.zoomImage}" alt="반품번호·반품처 확대"><input type="file" id="wzZoomInput" accept="image/*" style="display:none;">`;
+      zone.innerHTML = `<img src="${wz.zoomImage}" alt="반품번호 확대"><input type="file" id="wzZoomInput" accept="image/*" style="display:none;">`;
       const resultEl = document.getElementById('wzZoomResultMsg');
       resultEl.style.display = 'none';
       document.getElementById('wzZoomProgressWrap').style.display = 'block';
-      document.getElementById('wzZoomProgress').textContent = '🔄 반품번호·반품처 인식 중... (몇 초 걸려요)';
+      document.getElementById('wzZoomProgress').textContent = '🔄 반품번호 인식 중... (몇 초 걸려요)';
       const { text, words } = await runReceiptOcr(wz.zoomImage);
       wz.zoomRawText = text;
       const foundNumber = extractReturnNumberGuess(words, text);
-      const foundHospital = extractHospitalGuessByWords(words, text);
       document.getElementById('wzZoomProgressWrap').style.display = 'none';
 
-      // 반품번호 상태 판정
+      // 반품번호 상태 판정 (반품처는 더 이상 OCR로 읽지 않음 - 파트너 마스터에서 검색/선택)
       let numLine;
       if(foundNumber){
         const cur = document.getElementById('wz_returnNumber').value.trim();
@@ -1210,24 +1748,8 @@ function renderWizardStep2(modal){
         numLine = `<span style="color:var(--danger);">❌ 반품번호: 인식 안 됨 - 직접 입력해주세요</span>`;
       }
 
-      // 반품처 상태 판정 - "반품처"/"병원명" 라벨과 같은 줄의 오른쪽 값을 통째로 가져옴
-      let hospLine;
-      if(foundHospital){
-        const curHosp = document.getElementById('wz_hospitalName').value.trim();
-        if(!curHosp){
-          document.getElementById('wz_hospitalName').value = foundHospital;
-          hospLine = `<span style="color:var(--green);">✅ 반품처: ${escapeHtml(foundHospital)} 인식됨</span>`;
-        } else if(curHosp !== foundHospital){
-          hospLine = `<span style="color:var(--amber);">⚠️ 반품처: 인식값(${escapeHtml(foundHospital)})이 기존 값과 달라요 - 확인해주세요</span>`;
-        } else {
-          hospLine = `<span style="color:var(--green);">✅ 반품처: ${escapeHtml(foundHospital)} (기존 값과 동일)</span>`;
-        }
-      } else {
-        hospLine = `<span style="color:var(--danger);">❌ 반품처: 인식 안 됨 - 직접 입력해주세요</span>`;
-      }
-
       resultEl.style.display = 'block';
-      resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; background:#F1F3F5; padding:8px 10px; border-radius:8px; margin-top:8px; line-height:1.8;">${numLine}<br>${hospLine}</div>`;
+      resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; background:#F1F3F5; padding:8px 10px; border-radius:8px; margin-top:8px; line-height:1.8;">${numLine}</div>`;
     };
     reader.readAsDataURL(file);
   });
@@ -1258,8 +1780,11 @@ function renderWizardStep3(modal){
       <div id="wzDraftProgressWrap" style="display:none; margin-top:10px;"><div class="ocr-progress" id="wzDraftProgress">분석 중...</div></div>
       <div id="wzDraftResultMsg" style="display:none;"></div>
 
-      <div class="field" style="margin-top:14px;"><label>제품코드</label><input id="wz_it_productCode" type="text" autocomplete="off" value="${escapeHtml(wz.draft.productCode)}" placeholder="예: F00005444, 820-6045"></div>
-      <div class="field"><label>제품명</label><input id="wz_it_productName" type="text" autocomplete="off" value="${escapeHtml(wz.draft.productName)}" placeholder="인수증 참고해서 입력"></div>
+      <div class="field" style="margin-top:14px; position:relative;"><label>제품코드 (제품 마스터 검색)</label><input id="wz_it_productCode" type="text" autocomplete="off" value="${escapeHtml(wz.draft.productCode)}" placeholder="예: F00005444, 820-6045 (검색하려면 입력)">
+        <div id="wz_it_productSuggest" class="suggest-box" style="display:none;"></div>
+      </div>
+      <div id="wz_it_catalogRecommend" style="display:none; margin-bottom:10px;"></div>
+      <div class="field"><label>제품명</label><input id="wz_it_productName" type="text" autocomplete="off" value="${escapeHtml(wz.draft.productName)}" placeholder="제품 마스터에서 선택하면 자동으로 채워져요"></div>
       <div class="field"><label>제조번호(LOT) *</label><input id="wz_it_lot" type="text" autocomplete="off" value="${escapeHtml(wz.draft.lot)}" placeholder="실물 라벨의 LOT 번호"></div>
       <div class="field"><label>유효기간</label><input id="wz_it_expiryDate" type="text" autocomplete="off" value="${escapeHtml(wz.draft.expiryDate)}" placeholder="예: 2028.03 → 자동으로 2028.03.31"></div>
       <div class="field"><label>수량</label><input id="wz_it_quantity" type="text" autocomplete="off" value="${escapeHtml(wz.draft.quantity)}" placeholder="예: 15"></div>
@@ -1284,6 +1809,26 @@ function renderWizardStep3(modal){
 
   renderWzItemsList();
   renderWzDraftThumbs();
+
+  // 제품 마스터 검색 - 직접 검색/타이핑 선택도, OCR 추천 선택도 같은 목록을 공유함
+  window.fbListCatalogItems().then(list => { productCatalogCache = list; });
+  const codeInput = document.getElementById('wz_it_productCode');
+  const codeSuggest = document.getElementById('wz_it_productSuggest');
+  const nameInputForFill = document.getElementById('wz_it_productName');
+  codeInput.addEventListener('input', ()=>{
+    renderSuggestBox(productCatalogCache, codeInput.value, codeSuggest, codeInput, (item)=> item.code);
+  });
+  codeInput.addEventListener('itemselected', (e)=>{
+    if(e.detail && e.detail.name){ nameInputForFill.value = e.detail.name; } // 제품 선택 시 제품명은 항상 마스터 값으로 채움
+    const rec = document.getElementById('wz_it_catalogRecommend');
+    if(rec){ rec.style.display = 'none'; rec.innerHTML = ''; }
+  });
+  codeInput.addEventListener('focus', ()=>{
+    if(codeInput.value.trim()) renderSuggestBox(productCatalogCache, codeInput.value, codeSuggest, codeInput, (item)=> item.code);
+  });
+  document.addEventListener('click', function hideOnOutside(e){
+    if(!codeSuggest.contains(e.target) && e.target !== codeInput){ codeSuggest.style.display = 'none'; }
+  });
 
   const addBtn = document.getElementById('wzAddPhotoBtn');
   const input = document.getElementById('wzDraftPhotoInput');
@@ -1338,15 +1883,43 @@ function renderWizardStep3(modal){
         masterHit = await window.fbGetProductMaster(wz.draft.gtinLast6);
         if(wz.draftGen !== genAtStart) return; // 마스터 조회 중에도 품목이 바뀌었을 수 있음
       }
+      const recommendEl = document.getElementById('wz_it_catalogRecommend');
+      if(recommendEl){ recommendEl.style.display = 'none'; recommendEl.innerHTML = ''; }
+
       if(masterHit && masterHit.productCode){
         codeEl.value = masterHit.productCode;
-        if(masterHit.productName && !nameEl.value.trim()) nameEl.value = masterHit.productName;
+        let enrichedName = masterHit.productName;
+        if(!enrichedName){
+          const catalogHit = productCatalogCache.find(c => c.code === masterHit.productCode);
+          if(catalogHit) enrichedName = catalogHit.name;
+        }
+        if(enrichedName && !nameEl.value.trim()) nameEl.value = enrichedName;
         wz.draft.masterMatched = true;
         wz.draft.masterOriginalCode = masterHit.productCode;
-        found3.push(`제품코드 ${masterHit.productCode} (마스터)`);
+        found3.push(`제품코드 ${masterHit.productCode} (바코드매핑)`);
       } else if(!codeEl.value.trim()){
+        // OCR 후보 코드를 제품 마스터와 비교 - 정확일치면 바로 채우고, 유사후보만 있으면 추천으로 보여줌 (자동 확정 안함)
         const codeGuess = extractProductCodeGuess(combined);
-        if(codeGuess){ codeEl.value = codeGuess; found3.push(`제품코드 ${codeGuess}`); }
+        if(codeGuess){
+          const catalogMatches = findCatalogMatches(productCatalogCache, codeGuess, 5);
+          const exactHit = catalogMatches.find(m => m.score === 0);
+          if(exactHit){
+            codeEl.value = exactHit.code;
+            if(!nameEl.value.trim()) nameEl.value = exactHit.name;
+            found3.push(`제품코드 ${exactHit.code} (제품마스터 일치)`);
+          } else {
+            codeEl.value = codeGuess; // OCR 원본값은 참고용으로 일단 넣어둠
+            found3.push(`제품코드(추정) ${codeGuess} - 아래 추천 확인`);
+            if(catalogMatches.length > 0) renderCatalogRecommend(catalogMatches, codeEl, nameEl, recommendEl);
+          }
+        } else {
+          // 코드 후보 자체가 없으면 OCR 전체 텍스트에서 제품명 단어로 후보를 찾아봄
+          const nameMatches = findCatalogMatchesByName(productCatalogCache, combined, 5);
+          if(nameMatches.length > 0){
+            found3.push('제품코드는 못 찾았지만 제품명으로 후보를 찾았어요 - 아래 추천 확인');
+            renderCatalogRecommend(nameMatches, codeEl, nameEl, recommendEl);
+          }
+        }
       }
 
       const resultEl3b = document.getElementById('wzDraftResultMsg');
@@ -1391,6 +1964,29 @@ function renderWzDraftThumbs(){
 function wzRemoveDraftPhoto(i){
   wz.draft.photos.splice(i, 1);
   renderWzDraftThumbs();
+}
+
+// OCR 후보와 제품 마스터가 정확히 일치하지 않을 때 - 비슷한 후보들을 보여주고 사용자가 직접 선택하게 함 (자동 확정 안함)
+function renderCatalogRecommend(matches, codeEl, nameEl, container){
+  if(!container || !matches || matches.length === 0) return;
+  container.style.display = 'block';
+  container.innerHTML = `
+    <div style="font-size:12px; font-weight:700; color:var(--steel-dark); margin-bottom:6px;">🔎 비슷한 제품 (제품 마스터에서 찾음 - 맞으면 선택해주세요)</div>
+    ${matches.map((m, i) => `
+      <div class="suggest-item" style="border:1px solid var(--line); border-radius:8px; margin-bottom:6px;" data-ridx="${i}">
+        ${escapeHtml(m.code)} · ${escapeHtml(m.name)}
+      </div>`).join('')}
+  `;
+  container.querySelectorAll('[data-ridx]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const m = matches[parseInt(el.dataset.ridx, 10)];
+      codeEl.value = m.code;
+      nameEl.value = m.name;
+      container.style.display = 'none';
+      container.innerHTML = '';
+      showToast(`${m.code} 선택했어요`);
+    });
+  });
 }
 
 function wzReadDraftFieldsFromDom(){
@@ -1611,19 +2207,27 @@ function applyGuestModeUI(){
   const subtitle = document.getElementById('subtitle');
   const wizardBtn = document.getElementById('openWizard');
   const masterBtn = document.getElementById('masterBtn');
+  const partnerBtn = document.getElementById('partnerBtn');
+  const productCatalogBtn = document.getElementById('productCatalogBtn');
   if(isGuestMode){
     if(wizardBtn) wizardBtn.style.display = 'none';
     if(masterBtn) masterBtn.style.display = 'none';
+    if(partnerBtn) partnerBtn.style.display = 'none';
+    if(productCatalogBtn) productCatalogBtn.style.display = 'none';
     if(subtitle) subtitle.textContent = '반품인수증 · 실물 대조 검수 관리 (게스트)';
   } else {
     if(wizardBtn) wizardBtn.style.display = '';
     if(masterBtn) masterBtn.style.display = '';
+    if(partnerBtn) partnerBtn.style.display = '';
+    if(productCatalogBtn) productCatalogBtn.style.display = '';
     if(subtitle) subtitle.textContent = '반품인수증 · 실물 대조 검수 관리';
   }
 }
 
 document.getElementById('openWizard').addEventListener('click', openWizardModal);
 document.getElementById('masterBtn').addEventListener('click', openMasterModal);
+document.getElementById('partnerBtn').addEventListener('click', openPartnerModal);
+document.getElementById('productCatalogBtn').addEventListener('click', openProductCatalogModal);
 document.getElementById('exportExcel').addEventListener('click', exportToExcel);
 document.getElementById('logoutBtn').addEventListener('click', ()=>{
   showAppConfirm('로그아웃 할까요?', '로그아웃', async ()=>{ await window.fbLogout(); });
