@@ -1123,8 +1123,8 @@ function renderWizardStep1(modal){
     ${wizardStepsBarHtml()}
     <div class="hint" style="margin-bottom:10px;">반품인수증 전체가 잘 보이게 한 장 촬영해주세요. (증빙 보존을 위해 전체 문서를 촬영해주세요)<br>💡 이 사진은 원본 보존(인수서명본)용이에요. 반품번호·반품처 인식은 다음 단계에서 확대 촬영으로 한 번만 처리해요.</div>
     <div class="capture-zone" id="wzReceiptZone">
-      📷 눌러서 촬영
-      <input type="file" id="wzReceiptInput" accept="image/*" capture="environment">
+      📷 눌러서 촬영 또는 앨범에서 선택
+      <input type="file" id="wzReceiptInput" accept="image/*">
     </div>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closeOverlay('wizardOverlay')">취소</button>
@@ -1140,7 +1140,7 @@ function renderWizardStep1(modal){
     const reader = new FileReader();
     reader.onload = (e)=>{
       wz.receiptImage = e.target.result;
-      zone.innerHTML = `<img src="${wz.receiptImage}" alt="인수증"><input type="file" id="wzReceiptInput" accept="image/*" capture="environment" style="display:none;">`;
+      zone.innerHTML = `<img src="${wz.receiptImage}" alt="인수증"><input type="file" id="wzReceiptInput" accept="image/*" style="display:none;">`;
       document.getElementById('wz1NextBtn').disabled = false;
     };
     reader.readAsDataURL(file);
@@ -1159,13 +1159,13 @@ function renderWizardStep2(modal){
     <h2>새 반품 등록</h2>
     ${wizardStepsBarHtml()}
     <div class="hint" style="margin-bottom:10px;">1번에서 인식된 정보를 확인·수정해주세요. 아래에서 반품번호·반품처 부분만 확대 촬영하면 인식 정확도가 크게 올라가요 (선택이지만 강력 추천).</div>
-    <div class="field"><label>반품번호 *</label><input id="wz_returnNumber" type="text" value="${escapeHtml(wz.returnNumber)}" placeholder="예: 0042933059"></div>
-    <div class="field"><label>병원명 / 반품처</label><input id="wz_hospitalName" type="text" value="${escapeHtml(wz.hospitalName)}"></div>
+    <div class="field"><label>반품번호 *</label><input id="wz_returnNumber" type="text" autocomplete="off" value="${escapeHtml(wz.returnNumber)}" placeholder="예: 0042933059"></div>
+    <div class="field"><label>병원명 / 반품처</label><input id="wz_hospitalName" type="text" autocomplete="off" value="${escapeHtml(wz.hospitalName)}"></div>
 
     <div class="hint" style="margin:14px 0 6px;">📷 반품번호 · 반품처 부분 확대 촬영 (선택 · 정확도 향상용)</div>
     <div class="capture-zone" id="wzZoomZone">
-      📷 눌러서 반품번호·반품처 부분 확대 촬영 (건너뛰기 가능)
-      <input type="file" id="wzZoomInput" accept="image/*" capture="environment">
+      📷 눌러서 촬영 또는 앨범에서 선택 (건너뛰기 가능)
+      <input type="file" id="wzZoomInput" accept="image/*">
     </div>
     <div id="wzZoomProgressWrap" style="display:none;"><div class="ocr-progress" id="wzZoomProgress">분석 중...</div></div>
     <div id="wzZoomResultMsg" style="display:none;"></div>
@@ -1185,7 +1185,7 @@ function renderWizardStep2(modal){
     const reader = new FileReader();
     reader.onload = async (e)=>{
       wz.zoomImage = e.target.result;
-      zone.innerHTML = `<img src="${wz.zoomImage}" alt="반품번호·반품처 확대"><input type="file" id="wzZoomInput" accept="image/*" capture="environment" style="display:none;">`;
+      zone.innerHTML = `<img src="${wz.zoomImage}" alt="반품번호·반품처 확대"><input type="file" id="wzZoomInput" accept="image/*" style="display:none;">`;
       const resultEl = document.getElementById('wzZoomResultMsg');
       resultEl.style.display = 'none';
       document.getElementById('wzZoomProgressWrap').style.display = 'block';
@@ -1254,7 +1254,7 @@ function renderWizardStep3(modal){
       <div class="item-builder-title" id="wzBuilderTitle">${wz.editingItemId ? '✏️ 품목 수정 중' : '➕ 새 품목 입력'}</div>
       <div class="photo-thumbs" id="wzDraftThumbs"></div>
       <button class="photo-add-btn" id="wzAddPhotoBtn" style="margin-top:10px;" title="사진 추가">＋</button>
-      <input type="file" id="wzDraftPhotoInput" accept="image/*" capture="environment" style="display:none;">
+      <input type="file" id="wzDraftPhotoInput" accept="image/*" style="display:none;">
       <div id="wzDraftProgressWrap" style="display:none; margin-top:10px;"><div class="ocr-progress" id="wzDraftProgress">분석 중...</div></div>
       <div id="wzDraftResultMsg" style="display:none;"></div>
 
