@@ -720,17 +720,55 @@ async function runReceiptOcr(dataUrl){
 // 텍스트 줄 재조립 방식보다 훨씬 정확함 - 표 안에서 다른 행/다른 라벨로 잘못 건너뛰는 것을 원천 차단
 const ROW_STOP_LABELS = ['반품사유', '사업자', '공급처', '대표자', '청구처', '반품요청일자', '반품처', '연락처', '주소', '병원명', '제품코드', '제품명', 'REF', 'LOT', 'EXP'];
 
+// 편집거리(레벤슈타인) - 짧은 라벨 단어에서 OCR이 한 글자 정도 잘못 읽어도 찾아낼 수 있게 함
+function levenshtein(a, b){
+  const m = a.length, n = b.length;
+  if(Math.abs(m - n) > 2) return 99;
+  const dp = [];
+  for(let i = 0; i <= m; i++){ dp.push(new Array(n + 1).fill(0)); dp[i][0] = i; }
+  for(let j = 0; j <= n; j++) dp[0][j] = j;
+  for(let i = 1; i <= m; i++){
+    for(let j = 1; j <= n; j++){
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+    }
+  }
+  return dp[m][n];
+}
+
+// 인수증에서 흔히 나오는 라벨 전체 목록 - 유사매칭 시 "이미 다른 진짜 라벨과 정확히 일치하는 단어"는 제외하기 위함
+const ALL_KNOWN_LABELS = ['반품번호', '반품처', '병원명', '반품사유', '반품요청일자', '사업자', '공급처', '대표자', '청구처', '연락처', '주소', '제품코드', '제품명'];
+
+// wordText 안에 labelText와 편집거리 1 이내로 비슷한 부분문자열이 있는지 (완전 일치 우선 시도, 실패시 유사매칭)
+// 주의1: 라벨보다 짧은 부분문자열은 검사하지 않음 - 안 그러면 "반품번호"의 앞 2글자 "반품"이 "반품처"와 유사판정되는 오매칭이 생김
+// 주의2: 단어가 이미 "다른" 진짜 라벨과 정확히 일치하면 유사매칭 자체를 시도하지 않음 - "반품번호"와 "반품처"는 접두어가 같아서
+//        편집거리 1로도 겹칠 수 있는데, "반품번호"는 그 자체로 확실한 다른 필드이므로 절대 "반품처"로 오인하면 안 됨
+function fuzzyLabelIncludes(wordText, labelText){
+  if(!wordText || !labelText) return false;
+  if(wordText.includes(labelText)) return true;
+  const matchesOtherKnownLabel = ALL_KNOWN_LABELS.some(kl => kl !== labelText && wordText.includes(kl));
+  if(matchesOtherKnownLabel) return false;
+  const lLen = labelText.length;
+  if(wordText.length < lLen) return false;
+  for(let start = 0; start + lLen <= wordText.length; start++){
+    for(let len = lLen; len <= lLen + 1 && start + len <= wordText.length; len++){
+      if(levenshtein(wordText.substr(start, len), labelText) <= 1) return true;
+    }
+  }
+  return false;
+}
+
 function extractValueByWordPosition(words, labelText){
   if(!words || words.length === 0) return '';
   const cw = words.filter(w => w && w.text && w.text.trim() && w.bbox);
   for(let i = 0; i < cw.length; i++){
     let labelBbox = null;
-    if(cw[i].text.includes(labelText)){
+    if(fuzzyLabelIncludes(cw[i].text, labelText)){
       labelBbox = cw[i].bbox;
     } else {
       for(let span = 2; span <= 3 && i + span - 1 < cw.length; span++){
         const joined = cw.slice(i, i + span).map(w => w.text).join('');
-        if(joined.includes(labelText)){ labelBbox = cw[i + span - 1].bbox; break; }
+        if(fuzzyLabelIncludes(joined, labelText)){ labelBbox = cw[i + span - 1].bbox; break; }
       }
     }
     if(!labelBbox) continue;
@@ -745,7 +783,7 @@ function extractValueByWordPosition(words, labelText){
     let prevX1 = labelBbox.x1;
     for(const w of sameRow){
       if(w.bbox.x0 - prevX1 > labelH * 6) break; // 큰 간격이면 다른 필드로 넘어간 것으로 간주
-      if(ROW_STOP_LABELS.some(sw => w.text.includes(sw))) break; // 같은 줄의 다음 라벨을 만나면 멈춤
+      if(ROW_STOP_LABELS.some(sw => fuzzyLabelIncludes(w.text, sw))) break; // 같은 줄의 다음 라벨을 만나면 멈춤
       collected.push(w.text);
       prevX1 = w.bbox.x1;
       if(collected.join('').replace(/[^A-Za-z0-9가-힣]/g, '').length >= 24) break;
@@ -1083,13 +1121,11 @@ function renderWizardStep1(modal){
   modal.innerHTML = `
     <h2>새 반품 등록</h2>
     ${wizardStepsBarHtml()}
-    <div class="hint" style="margin-bottom:10px;">반품인수증 전체가 잘 보이게 한 장 촬영해주세요. (증빙 보존을 위해 전체 문서를 촬영해주세요)<br>💡 이 사진은 원본 보존(인수서명본)용이라 글씨가 작아져도 괜찮아요 - 자동인식이 안 돼도 정상이에요. 실제 인식은 다음 단계에서 반품번호·반품처 부분만 확대 촬영해서 처리해요.</div>
+    <div class="hint" style="margin-bottom:10px;">반품인수증 전체가 잘 보이게 한 장 촬영해주세요. (증빙 보존을 위해 전체 문서를 촬영해주세요)<br>💡 이 사진은 원본 보존(인수서명본)용이에요. 반품번호·반품처 인식은 다음 단계에서 확대 촬영으로 한 번만 처리해요.</div>
     <div class="capture-zone" id="wzReceiptZone">
-      📷 눌러서 촬영 또는 사진 선택
+      📷 눌러서 촬영
       <input type="file" id="wzReceiptInput" accept="image/*" capture="environment">
     </div>
-    <div id="wzReceiptProgressWrap" style="display:none;"><div class="ocr-progress" id="wzReceiptProgress">분석 중...</div></div>
-    <div id="wzReceiptResultMsg" style="display:none;"></div>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closeOverlay('wizardOverlay')">취소</button>
       <button class="btn-submit" id="wz1NextBtn" disabled>다음 단계</button>
@@ -1098,33 +1134,14 @@ function renderWizardStep1(modal){
   const zone = document.getElementById('wzReceiptZone');
   const input = document.getElementById('wzReceiptInput');
   zone.addEventListener('click', ()=> input.click());
-  input.addEventListener('change', async ()=>{
+  input.addEventListener('change', ()=>{
     if(!input.files.length) return;
     const file = input.files[0];
     const reader = new FileReader();
-    reader.onload = async (e)=>{
+    reader.onload = (e)=>{
       wz.receiptImage = e.target.result;
       zone.innerHTML = `<img src="${wz.receiptImage}" alt="인수증"><input type="file" id="wzReceiptInput" accept="image/*" capture="environment" style="display:none;">`;
-      document.getElementById('wzReceiptResultMsg').style.display = 'none';
-      document.getElementById('wzReceiptProgressWrap').style.display = 'block';
-      document.getElementById('wzReceiptProgress').textContent = '🔄 텍스트 자동 인식 중... (몇 초 걸려요)';
-      document.getElementById('wz1NextBtn').disabled = true;
-      const { text, words } = await runReceiptOcr(wz.receiptImage);
-      wz.receiptRawText = text;
-      wz.returnNumber = extractReturnNumberGuess(words, text);
-      const hospGuess1 = extractHospitalGuessByWords(words, text);
-      if(hospGuess1) wz.hospitalName = hospGuess1;
-      document.getElementById('wzReceiptProgressWrap').style.display = 'none';
       document.getElementById('wz1NextBtn').disabled = false;
-      const resultEl1 = document.getElementById('wzReceiptResultMsg');
-      resultEl1.style.display = 'block';
-      const numLine1 = wz.returnNumber
-        ? `<span style="color:var(--green);">✅ 반품번호: ${escapeHtml(wz.returnNumber)} 인식됨</span>`
-        : `<span style="color:var(--ink-muted);">➖ 반품번호: 인식 안 됨 (전체샷이라 정상 - 다음 단계 확대촬영에서 재시도)</span>`;
-      const hospLine1 = hospGuess1
-        ? `<span style="color:var(--green);">✅ 반품처: ${escapeHtml(hospGuess1)} 인식됨</span>`
-        : `<span style="color:var(--ink-muted);">➖ 반품처: 인식 안 됨 (전체샷이라 정상 - 다음 단계 확대촬영에서 재시도)</span>`;
-      resultEl1.innerHTML = `<div style="font-size:12.5px; font-weight:600; background:#F1F3F5; padding:8px 10px; border-radius:8px; margin-top:8px; line-height:1.8;">${numLine1}<br>${hospLine1}<br><span style="color:var(--ink-muted); font-weight:500;">👉 2단계에서 다시 한번 확인·확대촬영해주세요</span></div>`;
     };
     reader.readAsDataURL(file);
   });
@@ -1147,7 +1164,7 @@ function renderWizardStep2(modal){
 
     <div class="hint" style="margin:14px 0 6px;">📷 반품번호 · 반품처 부분 확대 촬영 (선택 · 정확도 향상용)</div>
     <div class="capture-zone" id="wzZoomZone">
-      📷 눌러서 반품번호·반품처 부분 확대 촬영 또는 건너뛰기
+      📷 눌러서 반품번호·반품처 부분 확대 촬영 (건너뛰기 가능)
       <input type="file" id="wzZoomInput" accept="image/*" capture="environment">
     </div>
     <div id="wzZoomProgressWrap" style="display:none;"><div class="ocr-progress" id="wzZoomProgress">분석 중...</div></div>
