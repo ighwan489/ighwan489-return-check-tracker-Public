@@ -66,10 +66,10 @@
         }, (err)=>{ console.error('Firestore watch error:', err); if(onError) onError(err); });
       };
 
-      // 사진은 본문 문서(1MB 제한)와 분리된 별도 컬렉션에 저장 - itemId로 어느 품목 사진인지 구분 (receipt/zoom은 itemId 없음)
-      window.fbAddPhoto = async function(recordId, itemId, type, data){
+      // 사진은 본문 문서(1MB 제한)와 분리된 별도 컬렉션에 저장 - itemId/lotId로 어느 품목·LOT 사진인지 구분 (receipt/zoom은 둘 다 없음)
+      window.fbAddPhoto = async function(recordId, itemId, type, data, lotId){
         try{
-          const ref = await addDoc(photosCol, { recordId, itemId: itemId || null, type, data, uploadedAt: new Date().toISOString() });
+          const ref = await addDoc(photosCol, { recordId, itemId: itemId || null, lotId: lotId || null, type, data, uploadedAt: new Date().toISOString() });
           return ref.id;
         }catch(e){ console.error('Firestore photo add error:', e); return null; }
       };
@@ -220,6 +220,7 @@
   .stat-chip{ display:flex; align-items:center; gap:5px; background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); border-radius:20px; padding:5px 11px; font-size:11.5px; font-weight:600; white-space:nowrap; color:#DCE5EC; }
   .stat-chip .n{ font-family:'JetBrains Mono',monospace; font-size:13px; }
   .stat-chip.c-pending .n{ color:#FFD9B3; }
+  .stat-chip.c-expected .n{ color:#B9C7D4; }
   .stat-chip.c-confirmed .n{ color:#A6E4C2; }
 
   .search-row{ margin-top:14px; position:relative; }
@@ -231,6 +232,7 @@
   .tab{ flex:1; text-align:center; padding:8px 4px; border-radius:8px; font-size:11.5px; font-weight:600; background:rgba(255,255,255,.08); color:#C9D5DF; cursor:pointer; border:1px solid transparent; }
   .tab.active{ background:#fff; color:var(--steel-dark); }
   .tab.active[data-filter="pending"]{ background:var(--amber); color:#fff; }
+  .tab.active[data-filter="expected"]{ background:var(--steel); color:#fff; }
   .tab.active[data-filter="confirmed"]{ background:var(--green); color:#fff; }
 
   .list{ padding:16px 14px 0; display:flex; flex-direction:column; gap:10px; }
@@ -241,6 +243,7 @@
   .card{ background:var(--surface); border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(20,30,40,.08); border:1px solid var(--line); position:relative; }
   .card.pending{ border-left:6px solid var(--amber); }
   .card.confirmed{ border-left:6px solid var(--green); }
+  .card.expected{ border-left:6px solid var(--steel); }
   .card-inner{ padding:14px 14px 14px 16px; }
   .card-top{ display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
   .lot{ font-family:'JetBrains Mono',monospace; font-weight:700; font-size:15.5px; letter-spacing:.01em; }
@@ -248,6 +251,7 @@
   .badge{ font-size:10.5px; font-weight:700; padding:4px 10px 4px 7px; border-radius:20px; white-space:nowrap; letter-spacing:.01em; display:inline-flex; align-items:center; gap:4px; }
   .badge.pending{ background:var(--amber); color:#fff; }
   .badge.confirmed{ background:var(--green); color:#fff; }
+  .badge.expected{ background:var(--steel); color:#fff; }
   .meta-row{ display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:10px; font-size:12px; color:var(--ink-muted); }
   .meta-row b{ color:var(--ink); font-weight:600; }
   .memo{ font-size:12.5px; color:var(--ink-muted); margin-top:8px; line-height:1.5; background:#F7F8FA; padding:8px 10px; border-radius:8px; }
@@ -267,11 +271,13 @@
 
   .fab{ position:fixed; right:20px; bottom:20px; z-index:30; width:56px; height:56px; border-radius:50%; border:none; background:var(--amber); color:#fff; font-size:26px; font-weight:700; box-shadow:0 4px 14px rgba(180,83,10,.4); cursor:pointer; display:flex; align-items:center; justify-content:center; max-width:720px; margin:0 auto; }
   .fab-sub{ position:fixed; right:20px; bottom:88px; z-index:30; width:44px; height:44px; border-radius:50%; border:none; background:var(--steel); color:#fff; font-size:18px; box-shadow:0 4px 14px rgba(44,74,102,.35); cursor:pointer; display:flex; align-items:center; justify-content:center; max-width:720px; margin:0 auto; }
+  .fab-sub2{ position:fixed; right:20px; bottom:156px; z-index:30; width:44px; height:44px; border-radius:50%; border:none; background:var(--green); color:#fff; font-size:18px; box-shadow:0 4px 14px rgba(21,115,71,.35); cursor:pointer; display:flex; align-items:center; justify-content:center; max-width:720px; margin:0 auto; }
   .fab-wrap{ position:fixed; left:0; right:0; bottom:0; display:flex; justify-content:center; pointer-events:none; }
   .fab-wrap .fab-inner{ position:relative; width:100%; max-width:720px; height:0; pointer-events:none; }
   .fab-wrap button{ pointer-events:auto; position:absolute; right:20px; }
   .fab-wrap .fab{ bottom:20px; }
   .fab-wrap .fab-sub{ bottom:88px; }
+  .fab-wrap .fab-sub2{ bottom:156px; }
 
   .wizard-steps{ display:flex; gap:4px; margin-bottom:16px; }
   .wizard-steps .ws{ flex:1; height:4px; border-radius:4px; background:var(--line); }
@@ -371,6 +377,7 @@
       <button class="logout-btn" id="masterBtn">🗂 바코드매핑</button>
     </div>
     <div class="stats-row">
+      <div class="stat-chip c-expected">예정 <span class="n" id="expectedCount">-</span></div>
       <div class="stat-chip c-pending">검수대기 <span class="n" id="pendingCount">-</span></div>
       <div class="stat-chip c-confirmed">검수완료 <span class="n" id="confirmedCount">-</span></div>
     </div>
@@ -380,6 +387,7 @@
     </div>
     <div class="tabs" id="tabs">
       <div class="tab active" data-filter="all">📋 전체</div>
+      <div class="tab" data-filter="expected">📋 예정</div>
       <div class="tab" data-filter="pending">⏳ 검수대기</div>
       <div class="tab" data-filter="confirmed">✅ 검수완료</div>
     </div>
@@ -390,6 +398,7 @@
 
 <div class="fab-wrap"><div class="fab-inner">
   <button class="fab-sub" id="exportExcel" title="현재 목록 엑셀 다운로드">⬇</button>
+  <button class="fab-sub2" id="openExcelImport" title="엑셀로 반품 예정등록">📥</button>
   <button class="fab" id="openWizard" title="새 반품 등록">+</button>
 </div></div>
 
@@ -450,8 +459,8 @@ function initRealtimeSync(){
   );
 }
 
-const STATUS_LABEL = { pending:'검수대기', confirmed:'검수완료' };
-const STATUS_ICON = { pending:'⏳', confirmed:'✅' };
+const STATUS_LABEL = { expected:'예정', pending:'검수대기', confirmed:'검수완료' };
+const STATUS_ICON = { expected:'📋', pending:'⏳', confirmed:'✅' };
 
 // 품목(실물 제품) 상태값 - 블락배치와 동일한 코드 체계 중 우선 5개만 사용
 const ITEM_STATUS_LABEL = { A:'정상', B:'판정대기', D:'부적합', E:'유효기간경과', F:'유효기간임박' };
@@ -470,14 +479,22 @@ function getFiltered(){
       return itemsOf(r).some(it =>
         (it.productCode||'').toLowerCase().includes(q) ||
         (it.productName||'').toLowerCase().includes(q) ||
-        (it.lot||'').toLowerCase().includes(q)
+        (it.lot||'').toLowerCase().includes(q) ||
+        (Array.isArray(it.lots) && it.lots.some(l => (l.lot||'').toLowerCase().includes(q)))
       );
     });
   }
   return list.sort((a,b) => new Date(b.registeredAt) - new Date(a.registeredAt));
 }
 
+function itemVerifiedQty(it){
+  if(!Array.isArray(it.lots)) return 0;
+  return it.lots.reduce((sum,l)=> sum + (parseFloat(l.quantity)||0), 0);
+}
+function isExcelItem(it){ return it.expectedQuantity !== undefined && it.expectedQuantity !== null && it.expectedQuantity !== ''; }
+
 function render(){
+  document.getElementById('expectedCount').textContent = records.filter(r => r.status === 'expected').length;
   document.getElementById('pendingCount').textContent = records.filter(r => r.status === 'pending').length;
   document.getElementById('confirmedCount').textContent = records.filter(r => r.status === 'confirmed').length;
 
@@ -507,7 +524,17 @@ function render(){
           <span>${fmtDate(r.registeredAt)}</span>
         </div>
         ${its.length > 0 ? `<div class="item-chip-list">
-          ${shown.map(it => { const st = it.status || 'A'; return `<div class="item-chip"><span class="ic-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')} <span style="font-size:9.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st] || 'var(--ink-muted)'}; padding:1px 6px; border-radius:8px;">${st}</span></span><span class="ic-lot">${escapeHtml(it.lot || '-')}</span></div>`; }).join('')}
+          ${shown.map(it => {
+            if(isExcelItem(it)){
+              const verified = itemVerifiedQty(it);
+              const expected = parseFloat(it.expectedQuantity) || 0;
+              const complete = expected > 0 && verified >= expected;
+              const lotCount = Array.isArray(it.lots) ? it.lots.length : 0;
+              return `<div class="item-chip"><span class="ic-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')}${complete ? ' <span style="color:var(--green); font-weight:700;">✓완료</span>' : ''}</span><span class="ic-lot">${verified}/${expected}개 · LOT ${lotCount}건</span></div>`;
+            }
+            const st = it.status || 'A';
+            return `<div class="item-chip"><span class="ic-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')} <span style="font-size:9.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st] || 'var(--ink-muted)'}; padding:1px 6px; border-radius:8px;">${st}</span></span><span class="ic-lot">${escapeHtml(it.lot || '-')}</span></div>`;
+          }).join('')}
           ${moreCount > 0 ? `<div class="item-chip" style="justify-content:center; color:var(--ink-muted);">+${moreCount}건 더보기</div>` : ''}
         </div>` : ''}
         ${r.memo ? `<div class="memo">${escapeHtml(r.memo)}</div>` : ''}
@@ -515,6 +542,7 @@ function render(){
         <div class="photo-badge">🖼 사진 ${(r.photoCount ?? '?')}장</div>
         <div class="card-actions">
           <button class="btn-sm btn-view btn-full-row" onclick="openDetail('${r.id}')">품목·사진 상세 보기</button>
+          ${!isGuestMode && (r.status === 'expected' || r.status === 'pending') ? `<button class="btn-sm" style="background:var(--blue-bg); color:var(--blue); border:1px solid #C7D8FC;" onclick="openInspectModal('${r.id}')">🔍 실물검수</button>` : ''}
           ${!isGuestMode ? `<button class="btn-sm btn-edit" onclick="openEditRecordModal('${r.id}')">✏️ 정보 수정</button>` : ''}
           ${(!isGuestMode && r.status === 'pending') ? `<button class="btn-sm btn-confirm" onclick="openConfirmModal('${r.id}')">검수완료 처리</button>` : ''}
           ${!isGuestMode ? `<button class="btn-sm btn-del" onclick="openDeleteConfirm('${r.id}')">삭제</button>` : ''}
@@ -610,6 +638,24 @@ function renderEditRecordItemsList(recordId){
     return;
   }
   wrap.innerHTML = its.map(it => {
+    if(isExcelItem(it)){
+      const verified = itemVerifiedQty(it);
+      const expected = parseFloat(it.expectedQuantity) || 0;
+      const complete = expected > 0 && verified >= expected;
+      return `
+      <div class="item-card">
+        <div class="item-card-top">
+          <div>
+            <div class="it-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')} ${complete ? '<span style="color:var(--green); font-weight:700;">✅ 완료</span>' : ''}</div>
+            <div class="it-lot">${escapeHtml(it.productCode)}</div>
+            <div class="it-meta">예정 ${expected}개 · 확인 ${verified}개 · LOT ${Array.isArray(it.lots) ? it.lots.length : 0}건</div>
+          </div>
+          <div class="it-actions">
+            <button onclick="closeOverlay('editRecordOverlay'); openInspectModal('${recordId}')">실물검수</button>
+          </div>
+        </div>
+      </div>`;
+    }
     const st = it.status || 'A';
     return `
     <div class="item-card">
@@ -730,7 +776,43 @@ async function openDetail(id){
   }
 
   its.forEach(it => {
-    const itPhotos = photos.filter(p => p.itemId === it.id);
+    if(isExcelItem(it)){
+      const verified = itemVerifiedQty(it);
+      const expected = parseFloat(it.expectedQuantity) || 0;
+      const complete = expected > 0 && verified >= expected;
+      const lots = Array.isArray(it.lots) ? it.lots : [];
+      html += `<div class="item-section-title" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px;">
+        <span>📦 ${escapeHtml(it.productName || it.productCode || '제품명 미입력')} <span style="font-size:10.5px; color:var(--ink-muted);">(${escapeHtml(it.productCode)})</span> ${complete ? '<span style="color:var(--green); font-weight:700;">✅ 완료</span>' : `<span style="color:var(--steel); font-weight:700;">예정 ${expected} / 확인 ${verified}</span>`}</span>
+        ${!isGuestMode ? `<button class="btn-sm btn-edit" onclick="closeOverlay('detailOverlay'); openAddLotModal('${id}','${it.id}')">+ LOT 추가</button>` : ''}
+      </div>`;
+      if(lots.length === 0){
+        html += `<div class="hint">아직 확인된 LOT이 없어요</div>`;
+      } else {
+        lots.forEach(l => {
+          const lPhotos = photos.filter(p => p.lotId === l.id);
+          const st = l.status || 'A';
+          html += `<div class="meta-row" style="margin-bottom:6px;">
+            <span>LOT <b>${escapeHtml(l.lot)}</b></span>
+            <span>유효기간 <b>${escapeHtml(l.expiryDate||'-')}</b></span>
+            <span>수량 <b>${escapeHtml(String(l.quantity))}</b></span>
+            <span style="font-size:9.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st]||'var(--ink-muted)'}; padding:2px 7px; border-radius:10px;">${st}</span>
+            ${!isGuestMode ? `<button class="btn-sm btn-del" onclick="deleteLotFromItem('${id}','${it.id}','${l.id}')">삭제</button>` : ''}
+          </div>`;
+          if(lPhotos.length > 0){
+            html += `<div class="cert-gallery">` + lPhotos.map(p => `
+              <div class="cert-gallery-item">
+                <img src="${p.data}" alt="실물사진" onclick="window.open('${p.data}','_blank')">
+                <div class="cert-gallery-meta">
+                  <span>📦 LOT ${escapeHtml(l.lot)} 사진 · ${p.uploadedAt ? fmtDate(p.uploadedAt) : ''}</span>
+                  ${!isGuestMode ? `<button class="btn-sm btn-del" onclick="deletePhotoFromDetail('${id}','${p.id}')">삭제</button>` : ''}
+                </div>
+              </div>`).join('') + `</div>`;
+          }
+        });
+      }
+      return;
+    }
+    const itPhotos = photos.filter(p => p.itemId === it.id && !p.lotId);
     const st = it.status || 'A';
     html += `<div class="item-section-title" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px;">
       <span>📦 ${escapeHtml(it.productName || it.productCode || '제품명 미입력')} · LOT ${escapeHtml(it.lot || '-')} <span style="font-size:10.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st] || 'var(--ink-muted)'}; padding:2px 7px; border-radius:10px; margin-left:4px;">${st} · ${ITEM_STATUS_LABEL[st] || st}</span></span>
@@ -1796,6 +1878,426 @@ async function deletePartnerEntry(code){
   loadPartnerList();
 }
 
+// ===================== 반품 예정 엑셀 일괄등록 ===================== //
+// 주문번호=반품번호, 반품처코드/명=파트너마스터 연동(신규코드 자동등록), 제품코드/명=제품마스터 연동(신규코드 자동등록), 예정수량=expectedQuantity
+
+function parseReturnExcelText(text){
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+  if(lines.length === 0) return { rows: [], error: '' };
+  const headerCols = lines[0].split('\t');
+  const headerMap = {};
+  headerCols.forEach((h,i)=>{ headerMap[h.trim()] = i; });
+  const idx = (name) => headerMap[name] !== undefined ? headerMap[name] : -1;
+  const iOrderNo = idx('주문번호');
+  const iPartnerCode = idx('반품처코드');
+  const iPartnerName = idx('반품처명');
+  const iProductCode = idx('제품코드');
+  const iProductName = idx('제품명');
+  const iReason = idx('반품상세사유');
+  const iStatus = idx('상태');
+  const iQty = idx('예정수량');
+  if(iOrderNo === -1 || iProductCode === -1){
+    return { rows: [], error: '헤더에서 "주문번호"와 "제품코드" 열을 찾지 못했어요. 엑셀 첫 줄이 헤더인지 확인해주세요.' };
+  }
+  const dataLines = lines.slice(1);
+  const rows = dataLines.map(line => {
+    const cols = line.split('\t');
+    return {
+      returnNumber: (cols[iOrderNo] || '').trim(),
+      partnerCode: iPartnerCode !== -1 ? (cols[iPartnerCode] || '').trim() : '',
+      partnerName: iPartnerName !== -1 ? (cols[iPartnerName] || '').trim() : '',
+      productCode: (cols[iProductCode] || '').trim(),
+      productName: iProductName !== -1 ? (cols[iProductName] || '').trim() : '',
+      reason: iReason !== -1 ? (cols[iReason] || '').trim() : '',
+      excelStatus: iStatus !== -1 ? (cols[iStatus] || '').trim() : '',
+      quantity: iQty !== -1 ? (cols[iQty] || '').trim() : ''
+    };
+  }).filter(r => r.returnNumber && r.productCode);
+  return { rows, error: '' };
+}
+
+function groupExcelRowsByReturnNumber(rows){
+  const map = new Map();
+  for(const r of rows){
+    if(!map.has(r.returnNumber)){
+      map.set(r.returnNumber, { returnNumber: r.returnNumber, partnerCode: r.partnerCode, partnerName: r.partnerName, items: [] });
+    }
+    const rec = map.get(r.returnNumber);
+    if(!rec.partnerCode && r.partnerCode) rec.partnerCode = r.partnerCode;
+    if(!rec.partnerName && r.partnerName) rec.partnerName = r.partnerName;
+    rec.items.push({ id: genId(), productCode: r.productCode, productName: r.productName, expectedQuantity: r.quantity, reason: r.reason, excelStatus: r.excelStatus, lots: [] });
+  }
+  return [...map.values()];
+}
+
+let excelImportGroups = [];
+
+async function openExcelImportModal(){
+  closeOverlay('excelImportOverlay');
+  excelImportGroups = [];
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'excelImportOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>반품 예정 엑셀 등록</h2>
+    <div class="hint" style="margin-bottom:10px;">주문 시스템 엑셀을 그대로 복사해서 붙여넣으세요. 필요한 열: <code>주문번호</code> · <code>반품처코드</code> · <code>반품처명</code> · <code>제품코드</code> · <code>제품명</code> · <code>반품상세사유</code> · <code>상태</code> · <code>예정수량</code> (열 순서 무관, 첫 줄은 반드시 헤더). 새 반품처코드·제품코드는 각 마스터에 자동 등록돼요.</div>
+    <div class="field">
+      <textarea id="exPasteBox" style="min-height:160px; font-family:'JetBrains Mono',monospace; font-size:12px;" placeholder="주문번호	주문순번	반품처코드	반품처명	제품코드	제품명	반품상세사유	상태	예정수량"></textarea>
+    </div>
+    <div class="err" id="ex_err" style="display:none;"></div>
+    <button class="btn-submit" id="exParseBtn" style="width:100%;">미리보기</button>
+    <div id="exPreviewWrap" style="display:none; margin-top:12px;">
+      <div class="field"><label>등록자 *</label><input id="ex_by" type="text" autocomplete="off" placeholder="이름" value="${escapeHtml(myName)}"></div>
+      <div class="preview-summary" id="exPreviewSummary"></div>
+      <div id="exGroupsPreview" style="max-height:260px; overflow-y:auto;"></div>
+      <button class="btn-submit green" id="exSubmitBtn" style="width:100%; margin-top:10px;">예정등록 실행</button>
+    </div>
+    <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('excelImportOverlay')">닫기</button></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('excelImportOverlay'); });
+
+  document.getElementById('exParseBtn').addEventListener('click', ()=>{
+    const text = document.getElementById('exPasteBox').value;
+    const { rows, error } = parseReturnExcelText(text);
+    const errEl = document.getElementById('ex_err');
+    if(error){ errEl.textContent = error; errEl.style.display = 'block'; return; }
+    if(rows.length === 0){ errEl.textContent = '인식된 데이터가 없어요.'; errEl.style.display = 'block'; return; }
+    errEl.style.display = 'none';
+    excelImportGroups = groupExcelRowsByReturnNumber(rows);
+    renderExcelImportPreview();
+    document.getElementById('exPreviewWrap').style.display = 'block';
+  });
+
+  document.getElementById('exSubmitBtn').addEventListener('click', submitExcelImport);
+}
+
+function renderExcelImportPreview(){
+  const totalItems = excelImportGroups.reduce((s,g)=>s+g.items.length, 0);
+  document.getElementById('exPreviewSummary').innerHTML = `반품번호 <b>${excelImportGroups.length}</b>건 · 품목 <b>${totalItems}</b>건 인식됐어요`;
+  const wrap = document.getElementById('exGroupsPreview');
+  wrap.innerHTML = excelImportGroups.slice(0, 30).map(g => `
+    <div class="item-card">
+      <div class="it-name">${escapeHtml(g.returnNumber)}</div>
+      <div class="it-meta">${escapeHtml(g.partnerCode||'-')} ${escapeHtml(g.partnerName||'')}</div>
+      ${g.items.map(it => `<div class="it-meta">└ ${escapeHtml(it.productCode)} ${escapeHtml(it.productName||'')} · 예정 ${escapeHtml(it.expectedQuantity||'')}개</div>`).join('')}
+    </div>`).join('') + (excelImportGroups.length > 30 ? `<div class="hint">외 ${excelImportGroups.length - 30}건 더...</div>` : '');
+}
+
+async function submitExcelImport(){
+  const by = document.getElementById('ex_by').value.trim();
+  if(!by){ showToast('등록자 이름을 입력해주세요'); return; }
+  const btn = document.getElementById('exSubmitBtn');
+  btn.disabled = true; btn.textContent = '등록 중...';
+
+  const existingPartners = await window.fbListPartnerMaster();
+  const existingCatalog = await window.fbListCatalogItems();
+  const partnerSet = new Set(existingPartners.map(p=>p.code));
+  const catalogMap = new Map(existingCatalog.map(c=>[c.code, c.name]));
+
+  let createdCount = 0, mergedCount = 0;
+
+  for(const g of excelImportGroups){
+    if(g.partnerCode && !partnerSet.has(g.partnerCode)){
+      await window.fbSavePartnerMaster(g.partnerCode, g.partnerName || g.partnerCode, by);
+      partnerSet.add(g.partnerCode);
+    }
+    for(const it of g.items){
+      if(catalogMap.has(it.productCode)){
+        it.productName = catalogMap.get(it.productCode) || it.productName;
+      } else if(it.productCode && it.productName){
+        await window.fbSaveCatalogItem(it.productCode, it.productName, by);
+        catalogMap.set(it.productCode, it.productName);
+      }
+    }
+
+    const existing = records.find(r => r.returnNumber === g.returnNumber && r.status !== 'confirmed');
+    if(existing){
+      const its = itemsOf(existing);
+      for(const newIt of g.items){
+        const match = its.find(x => x.productCode === newIt.productCode && isExcelItem(x));
+        if(match){ match.expectedQuantity = newIt.expectedQuantity; match.reason = newIt.reason; match.excelStatus = newIt.excelStatus; }
+        else { its.push(newIt); }
+      }
+      existing.items = its;
+      if(!existing.hospitalName && g.partnerName) existing.hospitalName = g.partnerName;
+      await window.fbUpdateRecord(existing.id, { items: its, hospitalName: existing.hospitalName });
+      mergedCount++;
+    } else {
+      const rec = {
+        id: genId(), returnNumber: g.returnNumber, hospitalName: g.partnerName || '', partnerCode: g.partnerCode || '',
+        items: g.items, memo: '', status: 'expected', source: 'excel',
+        registeredBy: by, registeredAt: new Date().toISOString(),
+        confirmedBy: null, confirmedAt: null, confirmMemo: null, photoCount: 0
+      };
+      records.push(rec);
+      await window.fbAddRecord(rec);
+      createdCount++;
+    }
+  }
+  render();
+  btn.disabled = false; btn.textContent = '예정등록 실행';
+  closeOverlay('excelImportOverlay');
+  await saveMyName(by);
+  showToast(`반품 예정등록 완료 - 신규 ${createdCount}건, 기존 병합 ${mergedCount}건`);
+}
+
+// ===================== 실물검수 (엑셀예정 품목에 LOT 실측 추가) ===================== //
+
+async function openInspectModal(recordId){
+  closeOverlay('inspectOverlay');
+  const rec = records.find(r => r.id === recordId);
+  if(!rec) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'inspectOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>실물 검수 · ${escapeHtml(rec.returnNumber||'')}</h2>
+    <div class="hint" style="margin-bottom:10px;">반품처: ${escapeHtml(rec.hospitalName||'-')}</div>
+    <div id="insp_itemsList"></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" style="flex:1;" onclick="closeOverlay('inspectOverlay')">닫기</button>
+      ${!isGuestMode ? `<button class="btn-submit green" id="insp_completeBtn">검수완료 처리</button>` : ''}
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('inspectOverlay'); });
+  renderInspectItemsList(recordId);
+
+  const completeBtn = document.getElementById('insp_completeBtn');
+  if(completeBtn){
+    completeBtn.addEventListener('click', ()=>{
+      const its = itemsOf(rec);
+      const incomplete = its.filter(it => isExcelItem(it) && itemVerifiedQty(it) < (parseFloat(it.expectedQuantity)||0));
+      const proceed = ()=>{ closeOverlay('inspectOverlay'); openConfirmModal(recordId); };
+      if(incomplete.length > 0){
+        showAppConfirm(`아직 예정수량만큼 확인 안 된 품목이 ${incomplete.length}건 있어요.\n그래도 검수완료 처리할까요?`, '그래도 완료', proceed);
+      } else {
+        proceed();
+      }
+    });
+  }
+}
+
+function renderInspectItemsList(recordId){
+  const wrap = document.getElementById('insp_itemsList');
+  if(!wrap) return;
+  const rec = records.find(r => r.id === recordId);
+  if(!rec) return;
+  const its = itemsOf(rec);
+  if(its.length === 0){ wrap.innerHTML = `<div class="hint" style="text-align:center; padding:10px 0;">등록된 품목이 없어요</div>`; return; }
+  wrap.innerHTML = its.map(it => {
+    if(isExcelItem(it)){
+      const verified = itemVerifiedQty(it);
+      const expected = parseFloat(it.expectedQuantity) || 0;
+      const complete = expected > 0 && verified >= expected;
+      const lots = Array.isArray(it.lots) ? it.lots : [];
+      return `<div class="item-card">
+        <div class="item-card-top">
+          <div>
+            <div class="it-name">${escapeHtml(it.productName || it.productCode)} ${complete ? '<span style="color:var(--green); font-weight:700;">✅ 완료</span>' : ''}</div>
+            <div class="it-lot">${escapeHtml(it.productCode)}</div>
+            <div class="it-meta">예정 ${expected}개 · 확인 ${verified}개${it.reason ? ' · ' + escapeHtml(it.reason) : ''}</div>
+          </div>
+          ${!isGuestMode ? `<div class="it-actions"><button onclick="openAddLotModal('${recordId}','${it.id}')">+ LOT 추가</button></div>` : ''}
+        </div>
+        ${lots.length > 0 ? `<div style="margin-top:8px; display:flex; flex-direction:column; gap:6px;">
+          ${lots.map(l => {
+            const st = l.status || 'A';
+            return `<div style="display:flex; justify-content:space-between; align-items:center; background:#fff; border:1px solid var(--line); border-radius:8px; padding:7px 10px; font-size:12px;">
+              <span><b>${escapeHtml(l.lot)}</b> · ${escapeHtml(l.expiryDate||'-')} · ${escapeHtml(String(l.quantity))}개 <span style="font-size:9.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st]||'var(--ink-muted)'}; padding:1px 6px; border-radius:8px;">${st}</span></span>
+              ${!isGuestMode ? `<button class="btn-sm btn-del" style="padding:3px 8px;" onclick="deleteLotFromItem('${recordId}','${it.id}','${l.id}')">삭제</button>` : ''}
+            </div>`;
+          }).join('')}
+        </div>` : `<div class="hint" style="margin-top:6px;">아직 확인된 LOT이 없어요</div>`}
+      </div>`;
+    }
+    const st = it.status || 'A';
+    return `<div class="item-card">
+      <div class="item-card-top">
+        <div>
+          <div class="it-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')} <span style="font-size:10.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st]||'var(--ink-muted)'}; padding:2px 7px; border-radius:10px;">${st}</span></div>
+          <div class="it-lot">LOT ${escapeHtml(it.lot||'-')}</div>
+          <div class="it-meta">${it.expiryDate?'유효기간 '+escapeHtml(it.expiryDate):''}${it.quantity?' · 수량 '+escapeHtml(it.quantity):''}</div>
+        </div>
+        ${!isGuestMode ? `<div class="it-actions"><button onclick="closeOverlay('inspectOverlay'); openEditItemModal('${recordId}','${it.id}')">수정</button></div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function deleteLotFromItem(recordId, itemId, lotId){
+  if(!confirm('이 LOT을 삭제할까요? 첨부사진도 같이 삭제되고 되돌릴 수 없어요.')) return;
+  const rec = records.find(r => r.id === recordId);
+  if(!rec) return;
+  const its = itemsOf(rec);
+  const it = its.find(x => x.id === itemId);
+  if(!it || !Array.isArray(it.lots)) return;
+  it.lots = it.lots.filter(l => l.id !== lotId);
+  rec.items = its;
+  render();
+  const ok = await window.fbUpdateRecord(recordId, { items: its });
+  const photos = await window.fbGetPhotos(recordId);
+  const orphan = photos.filter(p => p.lotId === lotId);
+  for(const p of orphan){ await window.fbDeletePhoto(p.id); }
+  if(orphan.length > 0 && typeof rec.photoCount === 'number'){
+    rec.photoCount = Math.max(0, rec.photoCount - orphan.length);
+    await window.fbUpdateRecord(recordId, { photoCount: rec.photoCount });
+  }
+  showToast(ok ? 'LOT 삭제 완료' : '삭제됐지만 일부 실패했어요');
+  openInspectModal(recordId);
+}
+
+let lotDraftGen = 0;
+let lotDraftPhotos = [];
+
+async function openAddLotModal(recordId, itemId){
+  closeOverlay('addLotOverlay');
+  const rec = records.find(r => r.id === recordId);
+  if(!rec) return;
+  const its = itemsOf(rec);
+  const it = its.find(x => x.id === itemId);
+  if(!it) return;
+  lotDraftPhotos = [];
+  lotDraftGen++;
+  const myGen = lotDraftGen;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'addLotOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>LOT 추가 · ${escapeHtml(it.productName || it.productCode)}</h2>
+    <div class="hint">제품코드 <b>${escapeHtml(it.productCode)}</b>가 실물과 맞는지 사진으로 대조해요. 예정 ${escapeHtml(String(it.expectedQuantity||''))}개 / 현재 확인 ${itemVerifiedQty(it)}개</div>
+    <div class="photo-thumbs" id="al_thumbs"></div>
+    <button class="photo-add-btn" id="al_addPhotoBtn" style="margin-top:10px;">＋</button>
+    <input type="file" id="al_photoInput" accept="image/*" style="display:none;">
+    <div id="al_progress" style="display:none;"><div class="ocr-progress">🔄 분석 중...</div></div>
+    <div id="al_resultMsg" style="display:none;"></div>
+    <div class="field" style="margin-top:14px;"><label>제조번호(LOT) *</label><input id="al_lot" type="text" autocomplete="off" placeholder="실물 라벨의 LOT 번호"></div>
+    <div id="al_lotCandidates" style="display:none; margin:-4px 0 10px;"></div>
+    <div class="field"><label>유효기간</label><input id="al_expiryDate" type="text" autocomplete="off" placeholder="예: 2028.03 → 2028.03.31"></div>
+    <div class="field"><label>수량 *</label><input id="al_quantity" type="text" autocomplete="off" placeholder="예: 5"></div>
+    <div class="field"><label>상태값</label>
+      <select id="al_status">${Object.keys(ITEM_STATUS_LABEL).map(k=>`<option value="${k}" ${k==='A'?'selected':''}>${k} · ${ITEM_STATUS_LABEL[k]}</option>`).join('')}</select>
+    </div>
+    <div class="err" id="al_err">LOT과 수량은 필수예요</div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeOverlay('addLotOverlay')">취소</button>
+      <button class="btn-submit" id="al_saveBtn">이 LOT 추가</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('addLotOverlay'); });
+
+  const addBtn = document.getElementById('al_addPhotoBtn');
+  const photoInput = document.getElementById('al_photoInput');
+  addBtn.addEventListener('click', ()=> photoInput.click());
+  photoInput.addEventListener('change', ()=>{
+    if(!photoInput.files.length) return;
+    const file = photoInput.files[0];
+    const reader = new FileReader();
+    reader.onload = async (e)=>{
+      if(lotDraftGen !== myGen) return;
+      const dataUrl = e.target.result;
+      const pidx = lotDraftPhotos.length;
+      lotDraftPhotos.push({ data: dataUrl, rawText: '' });
+      renderAlThumbs();
+      const prog = document.getElementById('al_progress');
+      const resMsg = document.getElementById('al_resultMsg');
+      if(resMsg) resMsg.style.display = 'none';
+      if(prog) prog.style.display = 'block';
+      const text = await runOcr(dataUrl);
+      if(lotDraftGen !== myGen) return;
+      lotDraftPhotos[pidx].rawText = text;
+      if(prog) prog.style.display = 'none';
+
+      const combined = lotDraftPhotos.map(p=>p.rawText).join('\n');
+      let found = [];
+      const lotEl = document.getElementById('al_lot');
+      const expEl = document.getElementById('al_expiryDate');
+      if(!lotEl || !expEl) return;
+
+      const codeGuess = extractProductCodeGuess(combined);
+      let mismatchWarn = '';
+      if(codeGuess){
+        if(normalizeCodeForMatch(codeGuess) !== normalizeCodeForMatch(it.productCode)){
+          mismatchWarn = `⚠️ 사진에서 읽은 코드(${escapeHtml(codeGuess)})가 예정 제품코드(${escapeHtml(it.productCode)})와 달라요 - 실물을 다시 확인해주세요!`;
+        } else {
+          found.push('제품코드 일치 확인');
+        }
+      }
+
+      const lotCandEl = document.getElementById('al_lotCandidates');
+      if(!lotEl.value.trim()){
+        const lotGuess = extractLotGuess(combined);
+        if(lotGuess){ lotEl.value = lotGuess; found.push(`LOT ${lotGuess}`); if(lotCandEl){ lotCandEl.style.display='none'; lotCandEl.innerHTML=''; } }
+        else if(lotCandEl){
+          const candidates = extractLotCandidates(combined, it.productCode);
+          if(candidates.length > 0){
+            lotCandEl.style.display = 'block';
+            lotCandEl.innerHTML = `<div class="hint" style="margin-bottom:4px;">🔎 후보 (탭해서 선택):</div>` +
+              candidates.map((c,ci)=>`<span class="suggest-item" style="display:inline-block; width:auto; border:1px solid var(--line); border-radius:16px; padding:5px 12px; margin:2px 4px 2px 0;" data-c="${ci}">${escapeHtml(c)}</span>`).join('');
+            lotCandEl.querySelectorAll('[data-c]').forEach(elx=>{
+              elx.addEventListener('click', ()=>{ lotEl.value = candidates[parseInt(elx.dataset.c,10)]; lotCandEl.style.display='none'; lotCandEl.innerHTML=''; });
+            });
+          }
+        }
+      }
+      if(!expEl.value.trim()){
+        const dateGuess = extractExpiryGuess(combined);
+        if(dateGuess){ expEl.value = dateGuess; found.push(`유효기간 ${dateGuess}`); }
+      }
+
+      const resultEl = document.getElementById('al_resultMsg');
+      if(resultEl){
+        resultEl.style.display = 'block';
+        const debugHtml = `<details style="margin-top:8px;"><summary style="font-size:11.5px; color:var(--ink-muted); cursor:pointer; font-weight:600;">🔍 OCR 원문 보기 (디버그용)</summary><pre style="white-space:pre-wrap; font-size:10.5px; color:var(--ink-muted); background:#F7F8FA; padding:10px; border-radius:8px; margin-top:6px; max-height:180px; overflow-y:auto; font-family:'JetBrains Mono',monospace;">${escapeHtml(combined||'(없음)')}</pre></details>`;
+        if(mismatchWarn){
+          resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--danger); background:#FBEAE8; padding:8px 10px; border-radius:8px;">${mismatchWarn}</div>${debugHtml}`;
+        } else if(found.length > 0){
+          resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--green); background:var(--green-bg); padding:8px 10px; border-radius:8px;">✅ ${escapeHtml(found.join(' · '))}</div>${debugHtml}`;
+        } else {
+          resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--ink-muted); background:#F1F3F5; padding:8px 10px; border-radius:8px;">인식된 정보가 없어요 - 직접 입력해주세요</div>${debugHtml}`;
+        }
+      }
+      photoInput.value = '';
+    };
+    reader.readAsDataURL(file);
+  });
+
+  document.getElementById('al_saveBtn').addEventListener('click', async ()=>{
+    const lot = document.getElementById('al_lot').value.trim();
+    const quantity = document.getElementById('al_quantity').value.trim();
+    if(!lot || !quantity){ document.getElementById('al_err').style.display = 'block'; return; }
+    const expiryDate = document.getElementById('al_expiryDate').value.trim();
+    const status = document.getElementById('al_status').value;
+    const newLot = { id: genId(), lot, expiryDate, quantity, status };
+    if(!Array.isArray(it.lots)) it.lots = [];
+    it.lots.push(newLot);
+    rec.items = its;
+    render();
+    closeOverlay('addLotOverlay');
+
+    const ok = await window.fbUpdateRecord(recordId, { items: its });
+    let uploaded = 0;
+    for(const p of lotDraftPhotos){
+      const c = await compressPhoto(p.data);
+      const pid = await window.fbAddPhoto(recordId, itemId, 'product', c, newLot.id);
+      if(pid) uploaded++;
+    }
+    if(uploaded > 0){
+      rec.photoCount = (rec.photoCount || 0) + uploaded;
+      await window.fbUpdateRecord(recordId, { photoCount: rec.photoCount });
+    }
+    showToast(ok ? 'LOT이 추가됐어요' : '추가됐지만 저장에 일부 실패했어요');
+    openInspectModal(recordId);
+  });
+}
+
+function renderAlThumbs(){
+  const wrap = document.getElementById('al_thumbs');
+  if(!wrap) return;
+  wrap.innerHTML = lotDraftPhotos.map((p,i)=>`<div class="photo-thumb"><img src="${p.data}" alt="사진 ${i+1}"><button class="rm" onclick="alRemovePhoto(${i})">✕</button></div>`).join('');
+}
+function alRemovePhoto(i){ lotDraftPhotos.splice(i,1); renderAlThumbs(); }
+
 // ===================== 등록 마법사 (4단계, 3단계=품목 반복 추가) ===================== //
 
 let wz = null;
@@ -2444,16 +2946,28 @@ function exportToExcel(){
       '검수자': r.confirmedBy || '', '검수일시': r.confirmedAt ? fmtDate(r.confirmedAt) : '', '메모': r.memo || ''
     };
     if(its.length === 0){
-      rows.push({ ...base, '제품코드':'', '제품명':'', '제조번호':'', '유효기간':'', '수량':'', '품목상태값':'' });
+      rows.push({ ...base, '제품코드':'', '제품명':'', '예정수량':'', '제조번호':'', '유효기간':'', '수량':'', '품목상태값':'' });
     } else {
       its.forEach(it => {
-        const st = it.status || 'A';
-        rows.push({ ...base, '제품코드': it.productCode||'', '제품명': it.productName||'', '제조번호': it.lot||'', '유효기간': it.expiryDate||'', '수량': it.quantity||'', '품목상태값': `${st} (${ITEM_STATUS_LABEL[st] || st})` });
+        if(isExcelItem(it)){
+          const lots = Array.isArray(it.lots) ? it.lots : [];
+          if(lots.length === 0){
+            rows.push({ ...base, '제품코드': it.productCode||'', '제품명': it.productName||'', '예정수량': it.expectedQuantity||'', '제조번호':'(미확인)', '유효기간':'', '수량':'', '품목상태값':'' });
+          } else {
+            lots.forEach(l => {
+              const st = l.status || 'A';
+              rows.push({ ...base, '제품코드': it.productCode||'', '제품명': it.productName||'', '예정수량': it.expectedQuantity||'', '제조번호': l.lot||'', '유효기간': l.expiryDate||'', '수량': l.quantity||'', '품목상태값': `${st} (${ITEM_STATUS_LABEL[st] || st})` });
+            });
+          }
+        } else {
+          const st = it.status || 'A';
+          rows.push({ ...base, '제품코드': it.productCode||'', '제품명': it.productName||'', '예정수량':'', '제조번호': it.lot||'', '유효기간': it.expiryDate||'', '수량': it.quantity||'', '품목상태값': `${st} (${ITEM_STATUS_LABEL[st] || st})` });
+        }
       });
     }
   });
   const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = [{wch:14},{wch:10},{wch:20},{wch:14},{wch:10},{wch:16},{wch:10},{wch:16},{wch:24},{wch:22},{wch:20},{wch:14},{wch:12},{wch:8},{wch:16}];
+  ws['!cols'] = [{wch:14},{wch:10},{wch:20},{wch:14},{wch:10},{wch:16},{wch:10},{wch:16},{wch:24},{wch:22},{wch:10},{wch:14},{wch:12},{wch:8},{wch:16}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '반품검수기록');
   const now = new Date();
@@ -2470,22 +2984,26 @@ function applyGuestModeUI(){
   const masterBtn = document.getElementById('masterBtn');
   const partnerBtn = document.getElementById('partnerBtn');
   const productCatalogBtn = document.getElementById('productCatalogBtn');
+  const excelImportBtn = document.getElementById('openExcelImport');
   if(isGuestMode){
     if(wizardBtn) wizardBtn.style.display = 'none';
     if(masterBtn) masterBtn.style.display = 'none';
     if(partnerBtn) partnerBtn.style.display = 'none';
     if(productCatalogBtn) productCatalogBtn.style.display = 'none';
+    if(excelImportBtn) excelImportBtn.style.display = 'none';
     if(subtitle) subtitle.textContent = '반품인수증 · 실물 대조 검수 관리 (게스트)';
   } else {
     if(wizardBtn) wizardBtn.style.display = '';
     if(masterBtn) masterBtn.style.display = '';
     if(partnerBtn) partnerBtn.style.display = '';
     if(productCatalogBtn) productCatalogBtn.style.display = '';
+    if(excelImportBtn) excelImportBtn.style.display = '';
     if(subtitle) subtitle.textContent = '반품인수증 · 실물 대조 검수 관리';
   }
 }
 
 document.getElementById('openWizard').addEventListener('click', openWizardModal);
+document.getElementById('openExcelImport').addEventListener('click', openExcelImportModal);
 document.getElementById('masterBtn').addEventListener('click', openMasterModal);
 document.getElementById('partnerBtn').addEventListener('click', openPartnerModal);
 document.getElementById('productCatalogBtn').addEventListener('click', openProductCatalogModal);
