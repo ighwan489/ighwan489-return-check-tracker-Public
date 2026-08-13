@@ -305,7 +305,7 @@
   .selection-bar .btn-sel-clear{ background:none; color:var(--ink-muted); border:1px solid var(--line); }
 
   .tabs{ display:flex; gap:5px; margin-top:12px; }
-  .tab{ flex:1; text-align:center; padding:8px 2px; border-radius:8px; font-size:10.8px; font-weight:600; background:rgba(255,255,255,.08); color:#C9D5DF; cursor:pointer; border:1px solid transparent; }
+  .tab{ flex:1; text-align:center; padding:9px 4px; border-radius:8px; font-size:11.5px; font-weight:600; background:rgba(255,255,255,.08); color:#C9D5DF; cursor:pointer; border:1px solid transparent; }
   .tab.active{ background:#fff; color:var(--steel-dark); }
   .tab.active[data-filter="pending"]{ background:var(--amber); color:#fff; }
   .tab.active[data-filter="inprogress"]{ background:var(--blue); color:#fff; }
@@ -462,6 +462,10 @@
       <div class="stat-chip c-inprogress">검수중 <span class="n" id="inprogressCount">-</span></div>
       <div class="stat-chip c-confirmed">검수완료 <span class="n" id="confirmedCount">-</span></div>
     </div>
+    <div class="tabs" id="topTabsRow" style="margin-top:8px;">
+      <div class="tab active" data-filter="all">📋 전체</div>
+      <div class="tab" data-filter="master">🗂 마스터</div>
+    </div>
     <div class="search-row">
       <span class="search-icon">🔍</span>
       <input id="searchInput" type="text" placeholder="반품번호, 제품코드, 제품명, LOT 검색" autocomplete="off">
@@ -471,11 +475,9 @@
     <div id="dateFilterHint" style="display:none; font-size:11px; color:#DCE5EC; margin-top:6px;"></div>
     <button class="print-btn" id="openStartInspect" style="width:100%; margin-top:10px; padding:11px; font-size:13px;">📷 반품번호로 검수 시작 (촬영/입력)</button>
     <div class="tabs" id="tabs">
-      <div class="tab active" data-filter="all">📋 전체</div>
       <div class="tab" data-filter="pending">⏳ 대기</div>
       <div class="tab" data-filter="inprogress">🔄 진행중</div>
       <div class="tab" data-filter="confirmed">✅ 완료</div>
-      <div class="tab" data-filter="master">🗂 마스터</div>
     </div>
   </header>
 
@@ -3065,7 +3067,7 @@ function renderInspectItemsList(recordId){
             <div class="it-lot">${escapeHtml(it.productCode)}</div>
             <div class="it-meta">예정 ${expected}개 · 확인 ${verified}개${it.reason ? ' · ' + escapeHtml(it.reason) : ''}</div>
           </div>
-          ${!isGuestMode ? `<div class="it-actions"><button onclick="openEditExcelItemModal('${recordId}','${it.id}')">수정</button><button onclick="openAddLotModal('${recordId}','${it.id}')">+ LOT 추가</button></div>` : ''}
+          ${!isGuestMode ? `<div class="it-actions"><button onclick="openEditExcelItemModal('${recordId}','${it.id}')">수정</button><button onclick="openAddLotModal('${recordId}','${it.id}')">+ LOT 추가</button>${it.isUnexpected ? `<button onclick="deleteUnexpectedItem('${recordId}','${it.id}')">삭제</button>` : ''}</div>` : ''}
         </div>
         ${lots.length > 0 ? `<div style="margin-top:8px; display:flex; flex-direction:column; gap:6px;">
           ${lots.map(l => {
@@ -3144,6 +3146,38 @@ function openAddUnexpectedItemModal(recordId){
     showToast(ok ? '예정 외 품목이 추가됐어요' : '추가됐지만 저장에 실패했어요');
     openInspectModal(recordId);
   });
+}
+
+// 예정외로 추가했던 품목을 통째로 삭제 (현장 상황이 바뀌어서 취소되거나, 담당자가 잘못 추가했을 때)
+async function deleteUnexpectedItem(recordId, itemId){
+  const rec = records.find(r => r.id === recordId);
+  if(!rec) return;
+  const its = itemsOf(rec);
+  const it = its.find(x => x.id === itemId);
+  if(!it) return;
+  const lotCount = Array.isArray(it.lots) ? it.lots.length : 0;
+  showAppConfirm(
+    `"${it.productName || it.productCode}" 예정외 품목을 삭제할까요?${lotCount > 0 ? `\n등록된 LOT ${lotCount}건과 첨부사진도 같이 삭제돼요.` : ''}\n삭제하면 되돌릴 수 없어요.`,
+    '삭제',
+    async ()=>{
+      const remaining = its.filter(x => x.id !== itemId);
+      rec.items = remaining;
+      render();
+      closeOverlay('inspectOverlay');
+      const ok = await window.fbUpdateRecord(recordId, { items: remaining });
+      try{
+        const photos = await window.fbGetPhotos(recordId);
+        const orphan = photos.filter(p => p.itemId === itemId);
+        for(const p of orphan){ await window.fbDeletePhoto(p.id); }
+        if(orphan.length > 0 && typeof rec.photoCount === 'number'){
+          rec.photoCount = Math.max(0, rec.photoCount - orphan.length);
+          await window.fbUpdateRecord(recordId, { photoCount: rec.photoCount });
+        }
+      }catch(e){ console.warn('예정외 품목 사진 정리 실패:', e); }
+      showToast(ok ? '예정외 품목이 삭제됐어요' : '삭제됐지만 저장에 실패했어요');
+      openInspectModal(recordId);
+    }
+  );
 }
 
 async function deleteLotFromItem(recordId, itemId, lotId){
