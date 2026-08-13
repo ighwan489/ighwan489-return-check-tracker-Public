@@ -3124,7 +3124,7 @@ function renderAlCodeSearchResult(query, expectedCode){
     </div>`;
   }).join('');
   el.querySelectorAll('[data-code]').forEach(elx => {
-    elx.addEventListener('click', ()=>{
+    elx.addEventListener('click', async ()=>{
       const chosenCode = elx.dataset.code;
       const resultEl = document.getElementById('al_resultMsg');
       if(normalizeCodeForMatch(chosenCode) === normalizeCodeForMatch(expectedCode)){
@@ -3134,6 +3134,8 @@ function renderAlCodeSearchResult(query, expectedCode){
         lotDraftMismatch = { scannedCode: chosenCode, expectedCode, source: '수동확인' };
         if(resultEl){ resultEl.style.display = 'block'; resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--danger); background:#FBEAE8; padding:8px 10px; border-radius:8px;">⚠️ 선택하신 코드(${escapeHtml(chosenCode)})가 예정 제품코드(${escapeHtml(expectedCode)})와 달라요</div>`; }
       }
+      const lotEl = document.getElementById('al_lot');
+      if(lotEl && lotEl.value.trim()) await checkBlockBatchForLot([chosenCode, expectedCode], lotEl.value.trim());
       showToast('제품코드 확인 결과가 반영됐어요');
     });
   });
@@ -3192,7 +3194,7 @@ async function openAddLotModal(recordId, itemId){
     lotFieldAutoFilled = false;
     clearTimeout(bbCheckTimer);
     const val = e.target.value;
-    bbCheckTimer = setTimeout(()=> checkBlockBatchForLot(it.productCode, val), 400);
+    bbCheckTimer = setTimeout(()=> checkBlockBatchForLot([it.productCode, lotDraftMismatch?.scannedCode], val), 400);
   });
   document.getElementById('al_expiryDate').addEventListener('input', ()=>{ expFieldAutoFilled = false; });
 
@@ -3305,6 +3307,13 @@ async function openAddLotModal(recordId, itemId){
         const dateGuess = extractExpiryGuess(combined);
         if(dateGuess){ expEl.value = dateGuess; expFieldAutoFilled = true; found.push(`유효기간 ${dateGuess}`); }
       }
+
+      // 예정 제품코드와 불일치가 감지됐다면 실제 스캔된 코드도 후보에 포함해서 블락배치 최종 대조
+      // (사진 처리 도중 여러 단계를 거치므로, 모든 판정이 끝난 이 시점에 한 번 더 확실하게 확인함)
+      const finalLotValue = lotEl.value.trim();
+      const bbCandidates = [it.productCode];
+      if(lotDraftMismatch && lotDraftMismatch.scannedCode) bbCandidates.push(lotDraftMismatch.scannedCode);
+      if(finalLotValue) await checkBlockBatchForLot(bbCandidates, finalLotValue);
 
       const resultEl = document.getElementById('al_resultMsg');
       if(resultEl){
@@ -4201,27 +4210,84 @@ async function openBlockBatchModal(){
   overlay.className = 'overlay'; overlay.id = 'blockBatchOverlay';
   overlay.innerHTML = `<div class="modal">
     <h2>블락배치 관리</h2>
-    <div class="hint" style="margin-bottom:10px;">반품으로 들어올 수 있는 블락배치(제품코드+LOT)를 미리 등록해두면, 실물검수에서 해당 LOT을 스캔/입력하는 순간 자동으로 인식돼서 상태값이 여기 등록된 값으로 자동 설정돼요.</div>
-    <div class="field"><label>제품코드 *</label><input id="bb_code" type="text" placeholder="예: F00005444"></div>
-    <div class="field"><label>LOT *</label><input id="bb_lot" type="text" placeholder="예: G5UM221"></div>
-    <div class="field"><label>상태값 *</label>
-      <select id="bb_status">
-        <option value="A">A · 정상</option>
-        <option value="B" selected>B · 판정대기</option>
-        <option value="D">D · 부적합</option>
-        <option value="E">E · 유효기간경과</option>
-        <option value="F">F · 유효기간임박</option>
-      </select>
+    <div class="hint" style="margin-bottom:10px;">반품으로 들어올 수 있는 블락배치(제품코드+LOT)를 미리 등록해두면, 실물검수에서 해당 LOT을 스캔/입력하는 순간 자동으로 인식돼서 상태값이 여기 등록된 값으로 자동 설정되고 잠겨요.</div>
+    <div class="modal-tabs">
+      <div class="modal-tab active" data-mode="single" id="bbTabSingle">개별 등록</div>
+      <div class="modal-tab" data-mode="bulk" id="bbTabBulk">일괄 등록 (붙여넣기)</div>
     </div>
-    <div class="field"><label>비고 (선택)</label><input id="bb_memo" type="text" placeholder="예: 품질이상 - 전량 회수 대상"></div>
-    <div class="err" id="bb_err">제품코드와 LOT을 모두 입력해주세요</div>
-    <button class="btn-submit" id="bb_addBtn" style="width:100%;">추가 / 수정</button>
+    <div id="bbSingleArea">
+      <div class="field"><label>제품코드 *</label><input id="bb_code" type="text" placeholder="예: F00005444"></div>
+      <div class="field"><label>LOT *</label><input id="bb_lot" type="text" placeholder="예: G5UM221"></div>
+      <div class="field"><label>상태값 *</label>
+        <select id="bb_status">
+          <option value="A">A · 정상</option>
+          <option value="B" selected>B · 판정대기</option>
+          <option value="D">D · 부적합</option>
+          <option value="E">E · 유효기간경과</option>
+          <option value="F">F · 유효기간임박</option>
+        </select>
+      </div>
+      <div class="field"><label>비고 (선택)</label><input id="bb_memo" type="text" placeholder="예: 품질이상 - 전량 회수 대상"></div>
+      <div class="err" id="bb_err">제품코드와 LOT을 모두 입력해주세요</div>
+      <button class="btn-submit" id="bb_addBtn" style="width:100%;">추가 / 수정</button>
+    </div>
+    <div id="bbBulkArea" style="display:none;">
+      <div class="field">
+        <label>제품코드 · LOT · 상태값 · 비고 (탭 또는 쉼표 구분, 한 줄에 하나씩)</label>
+        <textarea id="bb_bulkBox" style="min-height:140px; font-family:'JetBrains Mono',monospace; font-size:12.5px;" placeholder="F00005444	G5UM221	D	품질이상 - 전량 회수 대상
+F00012014	BBBBB	B	테스트 품질"></textarea>
+        <div class="hint">엑셀에서 4개 컬럼(제품코드·LOT·상태값·비고)을 그대로 드래그해서 복사·붙여넣기 하면 돼요. 상태값을 비우면 B(판정대기)로 등록돼요. 비고는 비워도 괜찮아요.</div>
+      </div>
+      <div class="err" id="bb_bulk_err">최소 1줄 이상, 제품코드·LOT은 필수예요</div>
+      <button class="btn-submit" id="bb_bulkAddBtn" style="width:100%;">일괄 등록</button>
+    </div>
     <div class="loading" id="bb_loading" style="padding:24px 0;">불러오는 중...</div>
     <div id="bb_list" style="display:none; margin-top:14px;"></div>
     <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('blockBatchOverlay')">닫기</button></div>
   </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('blockBatchOverlay'); });
+
+  overlay.querySelectorAll('.modal-tab').forEach(tab => {
+    tab.addEventListener('click', ()=>{
+      overlay.querySelectorAll('.modal-tab').forEach(t=>t.classList.remove('active'));
+      tab.classList.add('active');
+      const mode = tab.dataset.mode;
+      document.getElementById('bbSingleArea').style.display = mode === 'single' ? 'block' : 'none';
+      document.getElementById('bbBulkArea').style.display = mode === 'bulk' ? 'block' : 'none';
+    });
+  });
+
+  const VALID_STATUS = ['A','B','D','E','F'];
+  document.getElementById('bb_bulkAddBtn').addEventListener('click', async ()=>{
+    const raw = document.getElementById('bb_bulkBox').value;
+    const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const parsed = lines.map(line => {
+      const cols = line.split('\t').length > 1 ? line.split('\t') : line.split(',');
+      const code = (cols[0] || '').trim();
+      const lot = (cols[1] || '').trim();
+      let status = (cols[2] || '').trim().toUpperCase();
+      if(!VALID_STATUS.includes(status)) status = 'B';
+      const memo = (cols[3] || '').trim();
+      return { code, lot, status, memo, valid: !!code && !!lot };
+    });
+    const valid = parsed.filter(p => p.valid);
+    if(valid.length === 0){ document.getElementById('bb_bulk_err').style.display = 'block'; return; }
+    document.getElementById('bb_bulk_err').style.display = 'none';
+    const btn = document.getElementById('bb_bulkAddBtn');
+    btn.disabled = true; btn.textContent = `등록 중... (0/${valid.length})`;
+    let successCount = 0;
+    for(let i = 0; i < valid.length; i++){
+      const p = valid[i];
+      const ok = await window.fbSaveBlockBatch(p.code, p.lot, p.status, p.memo, myName);
+      if(ok) successCount++;
+      btn.textContent = `등록 중... (${i+1}/${valid.length})`;
+    }
+    btn.disabled = false; btn.textContent = '일괄 등록';
+    showToast(`${successCount}/${valid.length}건 일괄 등록 완료${parsed.length - valid.length > 0 ? ` (형식 오류 ${parsed.length - valid.length}건 제외)` : ''}`);
+    document.getElementById('bb_bulkBox').value = '';
+    loadBlockBatchList();
+  });
 
   document.getElementById('bb_addBtn').addEventListener('click', async ()=>{
     const code = document.getElementById('bb_code').value.trim();
@@ -4297,18 +4363,26 @@ async function findBlockBatchMatch(productCode, lot){
 }
 
 // LOT 추가 모달에서 제품코드+LOT이 확정될 때마다 블락배치 마스터와 대조 - 매칭되면 상태값을 강제로 맞춰주고 배너 표시
-async function checkBlockBatchForLot(productCode, lotValue){
+// productCodes는 배열 - 예정 제품코드와, 불일치가 감지됐다면 실제 스캔된 코드도 같이 넘겨서 둘 다 대조함
+// (블락배치가 "예정과 다른 제품"으로 등록돼 있는 경우도 있어서, 예정코드만 보면 놓칠 수 있음)
+async function checkBlockBatchForLot(productCodes, lotValue){
   const banner = document.getElementById('al_blockBatchBanner');
   const statusEl = document.getElementById('al_status');
   if(!banner) return;
-  const match = await findBlockBatchMatch(productCode, lotValue);
+  const candidates = (Array.isArray(productCodes) ? productCodes : [productCodes]).filter(Boolean);
+  let match = null;
+  for(const code of candidates){
+    match = await findBlockBatchMatch(code, lotValue);
+    if(match) break;
+  }
   if(match){
     lotDraftBlockBatch = { status: match.status, memo: match.memo || '' };
-    if(statusEl) statusEl.value = match.status;
+    if(statusEl){ statusEl.value = match.status; statusEl.disabled = true; }
     banner.style.display = 'block';
-    banner.innerHTML = `<div style="font-size:12.5px; font-weight:700; color:var(--danger); background:#FBEAE8; padding:8px 10px; border-radius:8px; margin-bottom:2px;">🚫 블락배치 LOT이에요! 상태값이 <b>${escapeHtml(match.status)}</b>로 자동 설정됐어요${match.memo ? ' · ' + escapeHtml(match.memo) : ''}</div>`;
+    banner.innerHTML = `<div style="font-size:12.5px; font-weight:700; color:var(--danger); background:#FBEAE8; padding:8px 10px; border-radius:8px; margin-bottom:2px;">🚫 블락배치 LOT이에요! 상태값이 <b>${escapeHtml(match.status)}</b>로 자동 설정되고 잠겼어요${match.memo ? ' · ' + escapeHtml(match.memo) : ''}</div>`;
   } else {
     lotDraftBlockBatch = null;
+    if(statusEl) statusEl.disabled = false;
     banner.style.display = 'none';
     banner.innerHTML = '';
   }
