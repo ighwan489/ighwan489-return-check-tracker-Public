@@ -43,6 +43,37 @@
       const photosCol = collection(db, "returnPhotos");
       const masterCol = collection(db, "productMaster"); // 문서 id = 바코드(GTIN) 끝 6자리
       const partnerCol = collection(db, "partnerMaster"); // 문서 id = 파트너코드
+      const blockBatchCol = collection(db, "blockBatchMaster"); // 문서 id = 제품코드_LOT (정규화)
+
+      function blockBatchKey(productCode, lot){
+        const norm = s => (s||'').toString().toUpperCase().replace(/[\s\-_.\/]/g, '');
+        return `${norm(productCode)}_${norm(lot)}`;
+      }
+
+      window.fbSaveBlockBatch = async function(productCode, lot, status, memo, by){
+        try{
+          const key = blockBatchKey(productCode, lot);
+          await setDoc(doc(blockBatchCol, key), { key, productCode, lot, status: status || 'B', memo: memo || '', updatedBy: by || '', updatedAt: new Date().toISOString() });
+          return true;
+        }catch(e){ console.error('블락배치 저장 실패:', e); return false; }
+      };
+      window.fbListBlockBatch = async function(){
+        try{
+          const snap = await getDocs(blockBatchCol);
+          return snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b)=> (a.productCode||'').localeCompare(b.productCode||''));
+        }catch(e){ console.error('블락배치 목록 조회 실패:', e); return []; }
+      };
+      window.fbDeleteBlockBatch = async function(key){
+        try{ await deleteDoc(doc(blockBatchCol, key)); return true; }
+        catch(e){ console.error('블락배치 삭제 실패:', e); return false; }
+      };
+      window.fbGetBlockBatch = async function(productCode, lot){
+        try{
+          const key = blockBatchKey(productCode, lot);
+          const snap = await getDoc(doc(blockBatchCol, key));
+          return snap.exists() ? snap.data() : null;
+        }catch(e){ console.error('블락배치 조회 실패:', e); return null; }
+      };
 
       window.fbAddRecord = async function(record){
         try{ await setDoc(doc(recordsCol, record.id), record); return true; }
@@ -257,6 +288,9 @@
   .print-btn{ background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.25); color:#fff; border-radius:9px; cursor:pointer; font-weight:600; }
   .print-btn.active-state{ background:#fff; color:var(--steel-dark); }
   .card-select-chk{ width:19px; height:19px; margin-right:8px; flex-shrink:0; accent-color:var(--steel); cursor:pointer; }
+  .modal-tabs{ display:flex; gap:6px; margin-bottom:16px; background:#F1F3F5; border-radius:10px; padding:4px; }
+  .modal-tab{ flex:1; text-align:center; padding:8px; border-radius:7px; font-size:12.5px; font-weight:600; color:var(--ink-muted); cursor:pointer; }
+  .modal-tab.active{ background:#fff; color:var(--steel-dark); box-shadow:0 1px 2px rgba(0,0,0,.08); }
   .selection-bar{ display:flex; align-items:center; justify-content:space-between; gap:8px; background:#EAF0F5; border:1px solid #C7D8E5; border-radius:10px; padding:10px 14px; margin:0 0 12px; }
   .selection-bar .left{ display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600; color:var(--steel-dark); }
   .selection-bar .left input{ width:17px; height:17px; accent-color:var(--steel); cursor:pointer; }
@@ -424,20 +458,9 @@
     <div class="search-row">
       <span class="search-icon">🔍</span>
       <input id="searchInput" type="text" placeholder="반품번호, 제품코드, 제품명, LOT 검색" autocomplete="off">
-      <button class="multi-search-btn" id="openMultiSearch" title="여러 건 한번에 검색">☰</button>
+      <button class="multi-search-btn" id="openMultiSearch" title="여러 건 검색 · 기간 조회">☰</button>
     </div>
     <div class="multi-chip" id="multiChip" style="display:none;"></div>
-    <div style="display:flex; gap:6px; margin-top:8px;">
-      <button class="print-btn" id="toggleDateFilter" style="flex:1;">📅 기간 조회</button>
-      <button class="print-btn" id="toggleSelectMode" style="flex:1;">☑️ 선택 모드</button>
-    </div>
-    <div id="dateFilterRow" style="display:none; gap:8px; margin-top:8px; align-items:center;">
-      <input type="date" id="dateFromInput" style="flex:1; padding:9px 8px; border-radius:8px; border:none; font-size:12.5px;">
-      <span style="color:#DCE5EC; font-size:12px;">~</span>
-      <input type="date" id="dateToInput" style="flex:1; padding:9px 8px; border-radius:8px; border:none; font-size:12.5px;">
-      <button class="print-btn" id="dateFilterApply" style="flex:0 0 auto; padding:9px 10px;">적용</button>
-      <button class="print-btn" id="dateFilterClear" style="flex:0 0 auto; padding:9px 10px;">해제</button>
-    </div>
     <div id="dateFilterHint" style="display:none; font-size:11px; color:#DCE5EC; margin-top:6px;"></div>
     <button class="print-btn" id="openStartInspect" style="width:100%; margin-top:10px; padding:11px; font-size:13px;">📷 반품번호로 검수 시작 (촬영/입력)</button>
     <div class="tabs" id="tabs">
@@ -457,7 +480,7 @@
   <div class="fab-menu" id="fabMenu">
     <div class="fab-item"><span class="fab-label">새 반품 등록</span><button class="i-primary" id="openWizard" title="새 반품 등록">📝</button></div>
     <div class="fab-item"><span class="fab-label">엑셀로 반품 예정등록</span><button class="i-green" id="openExcelImport" title="엑셀로 반품 예정등록">📥</button></div>
-    <div class="fab-item"><span class="fab-label">회사양식(입고전산) 다운로드</span><button class="i-steel" id="exportCompanyExcel" title="회사양식(입고전산) 엑셀 다운로드">🏭</button></div>
+    <div class="fab-item"><span class="fab-label">반품레포트 양식 다운로드</span><button class="i-steel" id="exportCompanyExcel" title="반품레포트 양식 엑셀 다운로드">🏭</button></div>
     <div class="fab-item"><span class="fab-label">전체 목록 엑셀 다운로드</span><button class="i-blue" id="exportExcel" title="현재 목록 엑셀 다운로드">⬇</button></div>
   </div>
   <button class="fab-toggle" id="fabToggleBtn" title="메뉴 열기">+</button>
@@ -472,7 +495,6 @@ let searchTerm = '';
 let myName = '';
 let isGuestMode = false;
 let multiTokens = []; // 반품번호/LOT 여러 건 한번에 검색용
-let selectMode = false;
 let selectedIds = new Set();
 let dateFrom = '';
 let dateTo = '';
@@ -610,12 +632,13 @@ function render(){
     const moreCount = its.length - shown.length;
     const mismatchCount = its.reduce((sum, it) => sum + (Array.isArray(it.lots) ? it.lots.filter(l => l.codeMismatch).length : 0), 0);
     const mismatchCodes = [...new Set(its.flatMap(it => Array.isArray(it.lots) ? it.lots.filter(l => l.codeMismatch).map(l => l.codeMismatch.scannedCode) : []))];
+    const blockBatchCount = its.reduce((sum, it) => sum + (Array.isArray(it.lots) ? it.lots.filter(l => l.blockBatch).length : 0), 0);
     return `
     <div class="card ${r.status}">
       <div class="card-inner">
         <div class="card-top">
           <div style="display:flex; align-items:flex-start; min-width:0;">
-            ${(selectMode && !isGuestMode) ? `<input type="checkbox" class="card-select-chk" ${selectedIds.has(r.id) ? 'checked' : ''} onchange="toggleSelect('${r.id}', this.checked)">` : ''}
+            ${!isGuestMode ? `<input type="checkbox" class="card-select-chk" ${selectedIds.has(r.id) ? 'checked' : ''} onchange="toggleSelect('${r.id}', this.checked)">` : ''}
             <div style="min-width:0;">
               <div class="lot">${escapeHtml(r.returnNumber || '(반품번호 미확인)')}</div>
               <div class="product">${escapeHtml(r.hospitalName || '병원명 미입력')} · 품목 ${its.length}건</div>
@@ -624,6 +647,7 @@ function render(){
           <span class="badge ${r.status}">${STATUS_ICON[r.status]} ${STATUS_LABEL[r.status]}</span>
         </div>
         ${mismatchCount > 0 ? `<div style="font-size:11px; font-weight:700; color:var(--danger); background:#FBEAE8; padding:5px 9px; border-radius:8px; margin-top:6px; display:inline-block;">⚠️ 제품코드 불일치 LOT ${mismatchCount}건 (${mismatchCodes.map(c=>escapeHtml(c)).join(', ')})</div>` : ''}
+        ${blockBatchCount > 0 ? `<div style="font-size:11px; font-weight:700; color:#fff; background:var(--steel-dark); padding:5px 9px; border-radius:8px; margin-top:6px; display:inline-block; margin-left:6px;">🚫 블락배치 LOT ${blockBatchCount}건</div>` : ''}
         <div class="meta-row">
           <span>등록 <b>${escapeHtml(r.registeredBy)}</b></span>
           <span>${fmtDate(r.registeredAt)}</span>
@@ -690,21 +714,58 @@ function openMultiSearchModal(){
   const overlay = document.createElement('div');
   overlay.className = 'overlay'; overlay.id = 'multiSearchOverlay';
   overlay.innerHTML = `<div class="modal">
-    <h2>여러 건 한번에 검색</h2>
-    <div class="field">
-      <label>반품번호 또는 LOT 번호 목록</label>
-      <textarea id="msBox" style="min-height:140px;" placeholder="0042933059
+    <h2>여러 건 검색 · 기간 조회</h2>
+    <div class="modal-tabs">
+      <div class="modal-tab active" data-mode="multi" id="msTabMulti">여러 건 검색</div>
+      <div class="modal-tab" data-mode="date" id="msTabDate">기간 조회</div>
+    </div>
+    <div id="msMultiArea">
+      <div class="field">
+        <label>반품번호 또는 LOT 번호 목록</label>
+        <textarea id="msBox" style="min-height:140px;" placeholder="0042933059
 123456
 G5UM221">${multiTokens.length ? multiTokens.join('\n') : ''}</textarea>
-      <div class="hint">엑셀에서 반품번호(또는 LOT) 열을 복사해서 그대로 붙여넣으세요. 줄바꿈·쉼표·공백 구분 모두 인식해요.</div>
+        <div class="hint">엑셀에서 반품번호(또는 LOT) 열을 복사해서 그대로 붙여넣으세요. 줄바꿈·쉼표·공백 구분 모두 인식해요.</div>
+      </div>
+      <div class="err" id="ms_err">1개 이상 입력해주세요</div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="closeOverlay('multiSearchOverlay')">취소</button>
+        <button class="btn-submit" onclick="applyMultiSearch()">검색 적용</button>
+      </div>
     </div>
-    <div class="err" id="ms_err">1개 이상 입력해주세요</div>
-    <div class="modal-actions">
-      <button class="btn-cancel" onclick="closeOverlay('multiSearchOverlay')">취소</button>
-      <button class="btn-submit" onclick="applyMultiSearch()">검색 적용</button>
-    </div></div>`;
+    <div id="msDateArea" style="display:none;">
+      <div class="hint" style="margin-bottom:10px;">전체·검수대기 탭에서는 <b>등록일</b> 기준, 검수완료 탭에서는 <b>검수완료일</b> 기준으로 조회돼요.</div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <input type="date" id="dateFromInput" class="login-input" style="margin-top:0; flex:1; text-align:left;" value="${dateFrom}">
+        <span>~</span>
+        <input type="date" id="dateToInput" class="login-input" style="margin-top:0; flex:1; text-align:left;" value="${dateTo}">
+      </div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="clearDateFilter(); closeOverlay('multiSearchOverlay');">기간 해제</button>
+        <button class="btn-submit" onclick="applyDateFilterFromModal()">조회 적용</button>
+      </div>
+    </div>
+  </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('multiSearchOverlay'); });
+  overlay.querySelectorAll('.modal-tab').forEach(tab => {
+    tab.addEventListener('click', ()=>{
+      overlay.querySelectorAll('.modal-tab').forEach(t=>t.classList.remove('active'));
+      tab.classList.add('active');
+      const mode = tab.dataset.mode;
+      document.getElementById('msMultiArea').style.display = mode === 'multi' ? 'block' : 'none';
+      document.getElementById('msDateArea').style.display = mode === 'date' ? 'block' : 'none';
+    });
+  });
+}
+
+function applyDateFilterFromModal(){
+  dateFrom = document.getElementById('dateFromInput').value;
+  dateTo = document.getElementById('dateToInput').value;
+  if(!dateFrom && !dateTo){ showToast('시작일 또는 종료일을 선택해주세요'); return; }
+  closeOverlay('multiSearchOverlay');
+  render();
+  showToast('기간 조회 적용됨');
 }
 
 function applyMultiSearch(){
@@ -720,13 +781,6 @@ function applyMultiSearch(){
 }
 
 // ===================== 선택 모드 / 일괄 삭제 ===================== //
-
-function toggleSelectMode(){
-  selectMode = !selectMode;
-  if(!selectMode) selectedIds.clear();
-  document.getElementById('toggleSelectMode').classList.toggle('active-state', selectMode);
-  render();
-}
 
 function toggleSelect(id, checked){
   if(checked) selectedIds.add(id);
@@ -746,7 +800,7 @@ function clearSelection(){ selectedIds.clear(); render(); }
 function renderSelectionBar(currentList){
   const bar = document.getElementById('selectionBar');
   if(!bar) return;
-  if(!selectMode || isGuestMode){ bar.innerHTML = ''; return; }
+  if(isGuestMode || selectedIds.size === 0){ bar.innerHTML = ''; return; }
   const count = selectedIds.size;
   const visibleIds = currentList.map(r => r.id);
   const allChecked = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id));
@@ -1079,7 +1133,8 @@ async function openDetail(id){
             <span style="font-size:9.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st]||'var(--ink-muted)'}; padding:2px 7px; border-radius:10px;">${st}</span>
             ${!isGuestMode ? `<button class="btn-sm btn-del" onclick="deleteLotFromItem('${id}','${it.id}','${l.id}')">삭제</button>` : ''}
           </div>
-          ${l.codeMismatch ? `<div style="font-size:11px; font-weight:700; color:var(--danger); margin-bottom:6px;">⚠️ ${escapeHtml(l.codeMismatch.source)}로 스캔된 코드(${escapeHtml(l.codeMismatch.scannedCode)})가 예정 제품코드(${escapeHtml(l.codeMismatch.expectedCode)})와 달라요</div>` : ''}`;
+          ${l.codeMismatch ? `<div style="font-size:11px; font-weight:700; color:var(--danger); margin-bottom:6px;">⚠️ ${escapeHtml(l.codeMismatch.source)}로 스캔된 코드(${escapeHtml(l.codeMismatch.scannedCode)})가 예정 제품코드(${escapeHtml(l.codeMismatch.expectedCode)})와 달라요</div>` : ''}
+          ${l.blockBatch ? `<div style="font-size:11px; font-weight:700; color:var(--steel-dark); margin-bottom:6px;">🚫 블락배치 LOT (상태 ${escapeHtml(l.blockBatch.status)})${l.blockBatch.memo ? ' · ' + escapeHtml(l.blockBatch.memo) : ''}</div>` : ''}`;
           if(lPhotos.length > 0){
             html += `<div class="cert-gallery">` + lPhotos.map(p => `
               <div class="cert-gallery-item">
@@ -2092,21 +2147,75 @@ async function openMasterModal(){
   overlay.innerHTML = `<div class="modal">
     <h2>제품코드 마스터 관리</h2>
     <div class="hint" style="margin-bottom:10px;">바코드(GTIN) 끝 6자리와 제품코드를 미리 등록해두면, 다음부터 실물사진 촬영 시 자동으로 제품코드가 채워져요. 촬영 중 자동 등록 제안을 받아도 되고, 여기서 직접 추가/수정해도 돼요.</div>
-    <div class="field"><label>바코드 끝 6자리 *</label><input id="mm_key" type="text" placeholder="예: 097042" maxlength="6"></div>
-    <div class="field" style="position:relative;">
-      <label>제품코드 *</label>
-      <input id="mm_code" type="text" autocomplete="off" placeholder="예: F00005444">
-      <div id="mm_crossRef" style="display:none;"></div>
+    <div class="modal-tabs">
+      <div class="modal-tab active" data-mode="single" id="mmTabSingle">개별 등록</div>
+      <div class="modal-tab" data-mode="bulk" id="mmTabBulk">일괄 등록 (붙여넣기)</div>
     </div>
-    <div class="field"><label>제품명 (선택)</label><input id="mm_name" type="text" placeholder="예: AV-Set ONLINEplus 5008-R"></div>
-    <div class="err" id="mm_err">바코드 끝 6자리와 제품코드를 모두 입력해주세요</div>
-    <button class="btn-submit" id="mm_addBtn" style="width:100%;">추가 / 수정</button>
+    <div id="mmSingleArea">
+      <div class="field"><label>바코드 끝 6자리 *</label><input id="mm_key" type="text" placeholder="예: 097042" maxlength="6"></div>
+      <div class="field" style="position:relative;">
+        <label>제품코드 *</label>
+        <input id="mm_code" type="text" autocomplete="off" placeholder="예: F00005444">
+        <div id="mm_crossRef" style="display:none;"></div>
+      </div>
+      <div class="field"><label>제품명 (선택)</label><input id="mm_name" type="text" placeholder="예: AV-Set ONLINEplus 5008-R"></div>
+      <div class="err" id="mm_err">바코드 끝 6자리와 제품코드를 모두 입력해주세요</div>
+      <button class="btn-submit" id="mm_addBtn" style="width:100%;">추가 / 수정</button>
+    </div>
+    <div id="mmBulkArea" style="display:none;">
+      <div class="field">
+        <label>바코드끝6자리 · 제품코드 · 제품명 (탭 또는 쉼표 구분, 한 줄에 하나씩)</label>
+        <textarea id="mm_bulkBox" style="min-height:140px; font-family:'JetBrains Mono',monospace; font-size:12.5px;" placeholder="097042	F00005444	AV-Set ONLINEplus 5008-R
+000617	AP29022	씨에이피디17 밸런스Low Ca"></textarea>
+        <div class="hint">엑셀에서 3개 컬럼(바코드끝6자리·제품코드·제품명)을 그대로 드래그해서 복사·붙여넣기 하면 돼요. 제품명은 비워도 괜찮아요.</div>
+      </div>
+      <div class="err" id="mm_bulk_err">최소 1줄 이상, 바코드끝6자리·제품코드는 필수예요</div>
+      <button class="btn-submit" id="mm_bulkAddBtn" style="width:100%;">일괄 등록</button>
+    </div>
     <div class="loading" id="mm_loading" style="padding:24px 0;">불러오는 중...</div>
     <div id="mm_list" style="display:none; margin-top:14px;"></div>
     <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('masterOverlay')">닫기</button></div>
   </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('masterOverlay'); });
+
+  overlay.querySelectorAll('.modal-tab').forEach(tab => {
+    tab.addEventListener('click', ()=>{
+      overlay.querySelectorAll('.modal-tab').forEach(t=>t.classList.remove('active'));
+      tab.classList.add('active');
+      const mode = tab.dataset.mode;
+      document.getElementById('mmSingleArea').style.display = mode === 'single' ? 'block' : 'none';
+      document.getElementById('mmBulkArea').style.display = mode === 'bulk' ? 'block' : 'none';
+    });
+  });
+
+  document.getElementById('mm_bulkAddBtn').addEventListener('click', async ()=>{
+    const raw = document.getElementById('mm_bulkBox').value;
+    const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const parsed = lines.map(line => {
+      const cols = line.split('\t').length > 1 ? line.split('\t') : line.split(',');
+      const key = (cols[0] || '').trim().replace(/\D/g, '').slice(-6);
+      const code = (cols[1] || '').trim();
+      const name = (cols[2] || '').trim();
+      return { key, code, name, valid: !!key && !!code };
+    });
+    const valid = parsed.filter(p => p.valid);
+    if(valid.length === 0){ document.getElementById('mm_bulk_err').style.display = 'block'; return; }
+    document.getElementById('mm_bulk_err').style.display = 'none';
+    const btn = document.getElementById('mm_bulkAddBtn');
+    btn.disabled = true; btn.textContent = `등록 중... (0/${valid.length})`;
+    let successCount = 0;
+    for(let i = 0; i < valid.length; i++){
+      const p = valid[i];
+      const ok = await window.fbSaveProductMaster(p.key, p.code, p.name, myName);
+      if(ok) successCount++;
+      btn.textContent = `등록 중... (${i+1}/${valid.length})`;
+    }
+    btn.disabled = false; btn.textContent = '일괄 등록';
+    showToast(`${successCount}/${valid.length}건 일괄 등록 완료${parsed.length - valid.length > 0 ? ` (형식 오류 ${parsed.length - valid.length}건 제외)` : ''}`);
+    document.getElementById('mm_bulkBox').value = '';
+    loadMasterList();
+  });
 
   document.getElementById('mm_addBtn').addEventListener('click', async ()=>{
     const key = document.getElementById('mm_key').value.trim();
@@ -2939,12 +3048,13 @@ function renderInspectItemsList(recordId){
         ${lots.length > 0 ? `<div style="margin-top:8px; display:flex; flex-direction:column; gap:6px;">
           ${lots.map(l => {
             const st = l.status || 'A';
-            return `<div style="display:flex; flex-direction:column; gap:4px; background:#fff; border:1px solid ${l.codeMismatch ? 'var(--danger)' : 'var(--line)'}; border-radius:8px; padding:7px 10px; font-size:12px;">
+            return `<div style="display:flex; flex-direction:column; gap:4px; background:#fff; border:1px solid ${l.codeMismatch ? 'var(--danger)' : (l.blockBatch ? 'var(--steel-dark)' : 'var(--line)')}; border-radius:8px; padding:7px 10px; font-size:12px;">
               <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span><b>${escapeHtml(l.lot)}</b> · ${escapeHtml(l.expiryDate||'-')} · ${escapeHtml(String(l.quantity))}개 <span style="font-size:9.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st]||'var(--ink-muted)'}; padding:1px 6px; border-radius:8px;">${st}</span></span>
                 ${!isGuestMode ? `<button class="btn-sm btn-del" style="padding:3px 8px;" onclick="deleteLotFromItem('${recordId}','${it.id}','${l.id}')">삭제</button>` : ''}
               </div>
               ${l.codeMismatch ? `<div style="font-size:11px; font-weight:700; color:var(--danger);">⚠️ ${escapeHtml(l.codeMismatch.source)}로 스캔된 코드(${escapeHtml(l.codeMismatch.scannedCode)})가 이 품목의 제품코드(${escapeHtml(l.codeMismatch.expectedCode)})와 달라요 - 실물을 다시 확인해주세요</div>` : ''}
+              ${l.blockBatch ? `<div style="font-size:11px; font-weight:700; color:var(--steel-dark);">🚫 블락배치 LOT (상태 ${escapeHtml(l.blockBatch.status)})${l.blockBatch.memo ? ' · ' + escapeHtml(l.blockBatch.memo) : ''}</div>` : ''}
             </div>`;
           }).join('')}
         </div>` : `<div class="hint" style="margin-top:6px;">아직 확인된 LOT이 없어요</div>`}
@@ -2989,6 +3099,7 @@ async function deleteLotFromItem(recordId, itemId, lotId){
 let lotDraftGen = 0;
 let lotDraftPhotos = [];
 let lotDraftMismatch = null; // 이 LOT을 추가하는 동안 감지된 제품코드 불일치 정보 (있으면 LOT에 같이 저장돼서 검수완료 시에도 계속 보임)
+let lotDraftBlockBatch = null; // 이 LOT이 블락배치 마스터와 매칭됐을 때의 {status, memo}
 let lotFieldAutoFilled = false;
 let expFieldAutoFilled = false;
 
@@ -3037,6 +3148,7 @@ async function openAddLotModal(recordId, itemId){
   if(!it) return;
   lotDraftPhotos = [];
   lotDraftMismatch = null;
+  lotDraftBlockBatch = null;
   lotFieldAutoFilled = false; // LOT 필드가 사용자 직접입력이 아니라 OCR/바코드 자동입력인지 - 재촬영 시 덮어쓸지 판단용
   expFieldAutoFilled = false;
   lotDraftGen++;
@@ -3052,6 +3164,7 @@ async function openAddLotModal(recordId, itemId){
     <input type="file" id="al_photoInput" accept="image/*" style="display:none;">
     <div id="al_progress" style="display:none;"><div class="ocr-progress">🔄 분석 중...</div></div>
     <div id="al_resultMsg" style="display:none;"></div>
+    <div id="al_blockBatchBanner" style="display:none;"></div>
     <div class="field" style="position:relative;">
       <label>제품코드 확인 (검색해서 대조)</label>
       <input id="al_codeSearch" type="text" autocomplete="off" placeholder="제품코드 뒷자리로 검색해서 실물과 대조해보세요">
@@ -3074,7 +3187,13 @@ async function openAddLotModal(recordId, itemId){
   overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('addLotOverlay'); });
 
   // 사용자가 직접 타이핑하면 그 순간부터는 "자동입력됨" 상태를 해제해서, 이후 재촬영해도 덮어쓰지 않음
-  document.getElementById('al_lot').addEventListener('input', ()=>{ lotFieldAutoFilled = false; });
+  let bbCheckTimer = null;
+  document.getElementById('al_lot').addEventListener('input', (e)=>{
+    lotFieldAutoFilled = false;
+    clearTimeout(bbCheckTimer);
+    const val = e.target.value;
+    bbCheckTimer = setTimeout(()=> checkBlockBatchForLot(it.productCode, val), 400);
+  });
   document.getElementById('al_expiryDate').addEventListener('input', ()=>{ expFieldAutoFilled = false; });
 
   window.fbListCatalogItems().then(list => { productCatalogCache = list; });
@@ -3121,6 +3240,7 @@ async function openAddLotModal(recordId, itemId){
           lotElBc.value = gs1Result.lot;
           lotFieldAutoFilled = true;
           barcodeFound.push(`LOT(바코드스캔) ${gs1Result.lot}`);
+          await checkBlockBatchForLot(it.productCode, gs1Result.lot);
         }
         if(gs1Result.expiryDate && expElBc && (!expElBc.value.trim() || expFieldAutoFilled)){
           expElBc.value = gs1Result.expiryDate;
@@ -3168,7 +3288,7 @@ async function openAddLotModal(recordId, itemId){
       const lotCandEl = document.getElementById('al_lotCandidates');
       if(!lotEl.value.trim() || lotFieldAutoFilled){
         const lotGuess = extractLotGuess(combined);
-        if(lotGuess){ lotEl.value = lotGuess; lotFieldAutoFilled = true; found.push(`LOT ${lotGuess}`); if(lotCandEl){ lotCandEl.style.display='none'; lotCandEl.innerHTML=''; } }
+        if(lotGuess){ lotEl.value = lotGuess; lotFieldAutoFilled = true; found.push(`LOT ${lotGuess}`); if(lotCandEl){ lotCandEl.style.display='none'; lotCandEl.innerHTML=''; } await checkBlockBatchForLot(it.productCode, lotGuess); }
         else if(lotCandEl){
           const candidates = extractLotCandidates(combined, it.productCode);
           if(candidates.length > 0){
@@ -3176,7 +3296,7 @@ async function openAddLotModal(recordId, itemId){
             lotCandEl.innerHTML = `<div class="hint" style="margin-bottom:4px;">🔎 후보 (탭해서 선택):</div>` +
               candidates.map((c,ci)=>`<span class="suggest-item" style="display:inline-block; width:auto; border:1px solid var(--line); border-radius:16px; padding:5px 12px; margin:2px 4px 2px 0;" data-c="${ci}">${escapeHtml(c)}</span>`).join('');
             lotCandEl.querySelectorAll('[data-c]').forEach(elx=>{
-              elx.addEventListener('click', ()=>{ lotEl.value = candidates[parseInt(elx.dataset.c,10)]; lotFieldAutoFilled = false; lotCandEl.style.display='none'; lotCandEl.innerHTML=''; });
+              elx.addEventListener('click', ()=>{ lotEl.value = candidates[parseInt(elx.dataset.c,10)]; lotFieldAutoFilled = false; lotCandEl.style.display='none'; lotCandEl.innerHTML=''; checkBlockBatchForLot(it.productCode, lotEl.value); });
             });
           }
         }
@@ -3221,6 +3341,7 @@ async function openAddLotModal(recordId, itemId){
     const status = document.getElementById('al_status').value;
     const newLot = { id: genId(), lot, expiryDate, quantity, status };
     if(lotDraftMismatch){ newLot.codeMismatch = lotDraftMismatch; }
+    if(lotDraftBlockBatch){ newLot.blockBatch = lotDraftBlockBatch; }
     if(!Array.isArray(it.lots)) it.lots = [];
     it.lots.push(newLot);
     rec.items = its;
@@ -3930,7 +4051,7 @@ function exportToExcel(){
   showToast(`${rows.length}건 엑셀로 다운로드 완료`);
 }
 
-// ===================== 엑셀 내보내기 (회사양식 · 입고전산 업로드용) ===================== //
+// ===================== 엑셀 내보내기 (반품레포트 양식) ===================== //
 // 반품번호(주문번호) → 제품코드 → LOT 순으로 오름차순 정렬해서, 같은 제품이라도 LOT이 다르면 줄을 나눠서 내보냄.
 // 반품 사유 / QREM발송예정 / 비고는 항상 빈칸으로 남겨서 엑셀에서 직접 채우도록 함.
 
@@ -3954,13 +4075,16 @@ async function exportToCompanyFormat(){
 
       lots.forEach(l => {
         const mismatch = l.codeMismatch;
+        const block = l.blockBatch;
+        const noteParts = [];
+        if(mismatch) noteParts.push(`${mismatch.expectedCode}에서 ${mismatch.scannedCode}로 변경됨`);
+        if(block) noteParts.push(block.memo && block.memo.trim() ? block.memo.trim() : '블락배치');
         rows.push({
           '입고일자': receivedDate,
           '주문번호': r.returnNumber || '',
           '배송처코드': partnerCode,
           '배송처명': partnerName,
           '제품코드': it.productCode || '',
-          '확인된제품코드': mismatch ? mismatch.scannedCode : '',
           '제품명': it.productName || '',
           'LOT': l.lot || '',
           '유효기간': l.expiryDate || '',
@@ -3969,7 +4093,9 @@ async function exportToCompanyFormat(){
           '수량': l.quantity || '',
           '반품 사유': '',
           'QREM발송예정': '',
-          '비고': mismatch ? `${mismatch.expectedCode}에서 ${mismatch.scannedCode}로 변경됨` : ''
+          '비고': noteParts.join(' / '),
+          '확인된제품코드': mismatch ? mismatch.scannedCode : '',
+          __highlight: !!(mismatch || block)
         });
       });
     });
@@ -3986,17 +4112,34 @@ async function exportToCompanyFormat(){
     return String(a['LOT']).localeCompare(String(b['LOT']), 'ko');
   });
 
-  const ws = XLSX.utils.json_to_sheet(rows);
+  // 정렬이 끝난 뒤의 최종 순서 기준으로 강조할 행을 뽑고, 시트에는 안 보일 내부 플래그(__highlight)는 제거
+  const highlightRowIdx = [];
+  rows.forEach((row, i) => { if(row.__highlight) highlightRowIdx.push(i); delete row.__highlight; });
+
+  const headerOrder = ['입고일자','주문번호','배송처코드','배송처명','제품코드','제품명','LOT','유효기간','기존','변경','수량','반품 사유','QREM발송예정','비고','확인된제품코드'];
+  const ws = XLSX.utils.json_to_sheet(rows, { header: headerOrder });
   ws['!cols'] = [
-    {wch:12},{wch:14},{wch:14},{wch:24},{wch:12},{wch:14},{wch:30},
-    {wch:14},{wch:12},{wch:8},{wch:8},{wch:8},{wch:14},{wch:16},{wch:20}
+    {wch:12},{wch:14},{wch:14},{wch:24},{wch:12},{wch:30},
+    {wch:14},{wch:12},{wch:8},{wch:8},{wch:8},{wch:14},{wch:16},{wch:20},{wch:14}
   ];
+
+  // 제품코드 불일치·블락배치 행 전체를 하늘색으로 칠해서 한눈에 확인되게 함 (헤더는 1행이라 실제 데이터는 2행부터)
+  const HIGHLIGHT_FILL = { patternType: 'solid', fgColor: { rgb: 'BDD7EE' } };
+  highlightRowIdx.forEach(rowIdx => {
+    const excelRow = rowIdx + 2; // 1-based, 헤더 다음줄부터
+    headerOrder.forEach((h, colIdx) => {
+      const cellRef = XLSX.utils.encode_cell({ r: excelRow - 1, c: colIdx });
+      if(!ws[cellRef]) ws[cellRef] = { t: 's', v: '' };
+      ws[cellRef].s = { fill: HIGHLIGHT_FILL };
+    });
+  });
+
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, '입고전산양식');
+  XLSX.utils.book_append_sheet(wb, ws, '반품레포트');
   const now = new Date();
   const pad = n => String(n).padStart(2,'0');
-  XLSX.writeFile(wb, `반품_입고전산양식_${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.xlsx`);
-  showToast(`${rows.length}건 회사양식으로 다운로드 완료`);
+  XLSX.writeFile(wb, `반품레포트양식_${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.xlsx`, { cellStyles: true });
+  showToast(`${rows.length}건 반품레포트 양식으로 다운로드 완료`);
 }
 
 // ===================== 초기화 / 로그인 ===================== //
@@ -4008,18 +4151,15 @@ function applyGuestModeUI(){
   const wizardItem = wizardBtn ? wizardBtn.closest('.fab-item') : null;
   const excelImportItem = excelImportBtn ? excelImportBtn.closest('.fab-item') : null;
   const masterTab = document.querySelector('.tab[data-filter="master"]');
-  const selectModeBtn = document.getElementById('toggleSelectMode');
   if(isGuestMode){
     if(wizardItem) wizardItem.style.display = 'none';
     if(excelImportItem) excelImportItem.style.display = 'none';
     if(masterTab) masterTab.style.display = 'none';
-    if(selectModeBtn) selectModeBtn.style.display = 'none';
     if(subtitle) subtitle.textContent = '반품인수증 · 실물 대조 검수 관리 (게스트)';
   } else {
     if(wizardItem) wizardItem.style.display = '';
     if(excelImportItem) excelImportItem.style.display = '';
     if(masterTab) masterTab.style.display = '';
-    if(selectModeBtn) selectModeBtn.style.display = '';
     if(subtitle) subtitle.textContent = '반품인수증 · 실물 대조 검수 관리';
   }
 }
@@ -4036,6 +4176,7 @@ function openMasterMenuModal(){
       <button class="master-menu-item" id="mm_partner"><span class="mm-icon">🏢</span><span class="mm-text"><b>파트너</b><small>반품처 코드 · 이름 관리</small></span></button>
       <button class="master-menu-item" id="mm_catalog"><span class="mm-icon">📦</span><span class="mm-text"><b>제품마스터</b><small>제품코드 · 제품명 관리</small></span></button>
       <button class="master-menu-item" id="mm_barcode"><span class="mm-icon">🗂</span><span class="mm-text"><b>바코드매핑</b><small>GTIN 끝 6자리 · 제품코드 매핑</small></span></button>
+      <button class="master-menu-item" id="mm_blockbatch"><span class="mm-icon">🚫</span><span class="mm-text"><b>블락배치</b><small>블락배치 제품코드·LOT 등록 - 검수 시 자동 인식</small></span></button>
       <button class="master-menu-item" id="mm_repair"><span class="mm-icon">🧹</span><span class="mm-text"><b>배송처코드 일괄 정리</b><small>코드가 비어있는 예전 기록을 파트너마스터로 자동 보정</small></span></button>
       <button class="master-menu-item" id="mm_logs"><span class="mm-icon">🕘</span><span class="mm-text"><b>정리 이력 보기</b><small>누가 언제 무슨 일괄정리를 실행했는지 확인</small></span></button>
     </div>
@@ -4046,8 +4187,131 @@ function openMasterMenuModal(){
   document.getElementById('mm_partner').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openPartnerModal(); });
   document.getElementById('mm_catalog').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openProductCatalogModal(); });
   document.getElementById('mm_barcode').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openMasterModal(); });
+  document.getElementById('mm_blockbatch').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openBlockBatchModal(); });
   document.getElementById('mm_repair').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); runPartnerCodeRepair(); });
   document.getElementById('mm_logs').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openMaintenanceLogModal(); });
+}
+
+// ===================== 블락배치 마스터 ===================== //
+let blockBatchCache = [];
+
+async function openBlockBatchModal(){
+  closeOverlay('blockBatchOverlay');
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'blockBatchOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>블락배치 관리</h2>
+    <div class="hint" style="margin-bottom:10px;">반품으로 들어올 수 있는 블락배치(제품코드+LOT)를 미리 등록해두면, 실물검수에서 해당 LOT을 스캔/입력하는 순간 자동으로 인식돼서 상태값이 여기 등록된 값으로 자동 설정돼요.</div>
+    <div class="field"><label>제품코드 *</label><input id="bb_code" type="text" placeholder="예: F00005444"></div>
+    <div class="field"><label>LOT *</label><input id="bb_lot" type="text" placeholder="예: G5UM221"></div>
+    <div class="field"><label>상태값 *</label>
+      <select id="bb_status">
+        <option value="A">A · 정상</option>
+        <option value="B" selected>B · 판정대기</option>
+        <option value="D">D · 부적합</option>
+        <option value="E">E · 유효기간경과</option>
+        <option value="F">F · 유효기간임박</option>
+      </select>
+    </div>
+    <div class="field"><label>비고 (선택)</label><input id="bb_memo" type="text" placeholder="예: 품질이상 - 전량 회수 대상"></div>
+    <div class="err" id="bb_err">제품코드와 LOT을 모두 입력해주세요</div>
+    <button class="btn-submit" id="bb_addBtn" style="width:100%;">추가 / 수정</button>
+    <div class="loading" id="bb_loading" style="padding:24px 0;">불러오는 중...</div>
+    <div id="bb_list" style="display:none; margin-top:14px;"></div>
+    <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('blockBatchOverlay')">닫기</button></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('blockBatchOverlay'); });
+
+  document.getElementById('bb_addBtn').addEventListener('click', async ()=>{
+    const code = document.getElementById('bb_code').value.trim();
+    const lot = document.getElementById('bb_lot').value.trim();
+    const status = document.getElementById('bb_status').value;
+    const memo = document.getElementById('bb_memo').value.trim();
+    if(!code || !lot){ document.getElementById('bb_err').style.display = 'block'; return; }
+    document.getElementById('bb_err').style.display = 'none';
+    const ok = await window.fbSaveBlockBatch(code, lot, status, memo, myName);
+    showToast(ok ? '블락배치가 등록됐어요' : '저장에 실패했어요');
+    if(ok){
+      document.getElementById('bb_code').value = '';
+      document.getElementById('bb_lot').value = '';
+      document.getElementById('bb_memo').value = '';
+      loadBlockBatchList();
+    }
+  });
+
+  loadBlockBatchList();
+}
+
+async function loadBlockBatchList(){
+  const loading = document.getElementById('bb_loading');
+  const listEl = document.getElementById('bb_list');
+  if(!loading || !listEl) return;
+  loading.style.display = 'block';
+  listEl.style.display = 'none';
+  const items = await window.fbListBlockBatch();
+  blockBatchCache = items;
+  loading.style.display = 'none';
+  listEl.style.display = 'block';
+  if(items.length === 0){
+    listEl.innerHTML = `<div class="hint" style="text-align:center; padding:12px 0;">등록된 블락배치가 없어요</div>`;
+    return;
+  }
+  listEl.innerHTML = `<div class="hint" style="margin-bottom:8px;">등록된 블락배치 (${items.length}건)</div>` + items.map(it => `
+    <div class="item-card">
+      <div class="item-card-top">
+        <div>
+          <div class="it-lot">${escapeHtml(it.productCode)} · ${escapeHtml(it.lot)} <span style="font-size:9.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[it.status]||'var(--ink-muted)'}; padding:1px 6px; border-radius:8px;">${escapeHtml(it.status)}</span></div>
+          <div class="it-meta">${escapeHtml(it.memo || '(비고 없음)')}</div>
+        </div>
+        <div class="it-actions">
+          <button onclick="editBlockBatchEntry('${escapeHtml(it.productCode)}','${escapeHtml(it.lot)}','${escapeHtml(it.status)}','${escapeHtml(it.memo||'')}')">수정</button>
+          <button onclick="deleteBlockBatchEntry('${escapeHtml(it.key)}')">삭제</button>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function editBlockBatchEntry(code, lot, status, memo){
+  document.getElementById('bb_code').value = code;
+  document.getElementById('bb_lot').value = lot;
+  document.getElementById('bb_status').value = status;
+  document.getElementById('bb_memo').value = memo;
+}
+
+async function deleteBlockBatchEntry(key){
+  const ok = await window.fbDeleteBlockBatch(key);
+  showToast(ok ? '삭제됐어요' : '삭제에 실패했어요');
+  if(ok) loadBlockBatchList();
+}
+
+// 제품코드+LOT으로 블락배치 마스터와 대조. 실물검수 중 자주 호출되므로 캐시를 우선 쓰고, 캐시가 비어있으면 새로 불러옴.
+async function findBlockBatchMatch(productCode, lot){
+  if(!productCode || !lot) return null;
+  if(!blockBatchCache || blockBatchCache.length === 0){
+    blockBatchCache = await window.fbListBlockBatch();
+  }
+  const norm = s => (s||'').toString().toUpperCase().replace(/[\s\-_.\/]/g, '');
+  const nc = norm(productCode), nl = norm(lot);
+  return blockBatchCache.find(b => norm(b.productCode) === nc && norm(b.lot) === nl) || null;
+}
+
+// LOT 추가 모달에서 제품코드+LOT이 확정될 때마다 블락배치 마스터와 대조 - 매칭되면 상태값을 강제로 맞춰주고 배너 표시
+async function checkBlockBatchForLot(productCode, lotValue){
+  const banner = document.getElementById('al_blockBatchBanner');
+  const statusEl = document.getElementById('al_status');
+  if(!banner) return;
+  const match = await findBlockBatchMatch(productCode, lotValue);
+  if(match){
+    lotDraftBlockBatch = { status: match.status, memo: match.memo || '' };
+    if(statusEl) statusEl.value = match.status;
+    banner.style.display = 'block';
+    banner.innerHTML = `<div style="font-size:12.5px; font-weight:700; color:var(--danger); background:#FBEAE8; padding:8px 10px; border-radius:8px; margin-bottom:2px;">🚫 블락배치 LOT이에요! 상태값이 <b>${escapeHtml(match.status)}</b>로 자동 설정됐어요${match.memo ? ' · ' + escapeHtml(match.memo) : ''}</div>`;
+  } else {
+    lotDraftBlockBatch = null;
+    banner.style.display = 'none';
+    banner.innerHTML = '';
+  }
 }
 
 async function openMaintenanceLogModal(){
@@ -4187,21 +4451,6 @@ document.getElementById('logoutBtn').addEventListener('click', ()=>{
 });
 document.getElementById('searchInput').addEventListener('input', (e)=>{ searchTerm = e.target.value; render(); });
 document.getElementById('openMultiSearch').addEventListener('click', openMultiSearchModal);
-document.getElementById('toggleSelectMode').addEventListener('click', toggleSelectMode);
-document.getElementById('toggleDateFilter').addEventListener('click', ()=>{
-  const row = document.getElementById('dateFilterRow');
-  const isHidden = row.style.display === 'none' || !row.style.display;
-  row.style.display = isHidden ? 'flex' : 'none';
-  document.getElementById('toggleDateFilter').classList.toggle('active-state', isHidden);
-});
-document.getElementById('dateFilterApply').addEventListener('click', ()=>{
-  dateFrom = document.getElementById('dateFromInput').value;
-  dateTo = document.getElementById('dateToInput').value;
-  if(!dateFrom && !dateTo){ showToast('시작일 또는 종료일을 선택해주세요'); return; }
-  render();
-  showToast('기간 조회 적용됨');
-});
-document.getElementById('dateFilterClear').addEventListener('click', clearDateFilter);
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', ()=>{
     if(tab.dataset.filter === 'master'){ openMasterMenuModal(); return; }
