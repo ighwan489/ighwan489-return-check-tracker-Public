@@ -274,12 +274,14 @@
   .fab{ position:fixed; right:20px; bottom:20px; z-index:30; width:56px; height:56px; border-radius:50%; border:none; background:var(--amber); color:#fff; font-size:26px; font-weight:700; box-shadow:0 4px 14px rgba(180,83,10,.4); cursor:pointer; display:flex; align-items:center; justify-content:center; max-width:720px; margin:0 auto; }
   .fab-sub{ position:fixed; right:20px; bottom:88px; z-index:30; width:44px; height:44px; border-radius:50%; border:none; background:var(--steel); color:#fff; font-size:18px; box-shadow:0 4px 14px rgba(44,74,102,.35); cursor:pointer; display:flex; align-items:center; justify-content:center; max-width:720px; margin:0 auto; }
   .fab-sub2{ position:fixed; right:20px; bottom:156px; z-index:30; width:44px; height:44px; border-radius:50%; border:none; background:var(--green); color:#fff; font-size:18px; box-shadow:0 4px 14px rgba(21,115,71,.35); cursor:pointer; display:flex; align-items:center; justify-content:center; max-width:720px; margin:0 auto; }
+  .fab-sub3{ position:fixed; right:20px; bottom:224px; z-index:30; width:44px; height:44px; border-radius:50%; border:none; background:var(--steel); color:#fff; font-size:18px; box-shadow:0 4px 14px rgba(44,74,102,.35); cursor:pointer; display:flex; align-items:center; justify-content:center; max-width:720px; margin:0 auto; }
   .fab-wrap{ position:fixed; left:0; right:0; bottom:0; display:flex; justify-content:center; pointer-events:none; }
   .fab-wrap .fab-inner{ position:relative; width:100%; max-width:720px; height:0; pointer-events:none; }
   .fab-wrap button{ pointer-events:auto; position:absolute; right:20px; }
   .fab-wrap .fab{ bottom:20px; }
   .fab-wrap .fab-sub{ bottom:88px; }
   .fab-wrap .fab-sub2{ bottom:156px; }
+  .fab-wrap .fab-sub3{ bottom:224px; }
 
   .wizard-steps{ display:flex; gap:4px; margin-bottom:16px; }
   .wizard-steps .ws{ flex:1; height:4px; border-radius:4px; background:var(--line); }
@@ -399,6 +401,7 @@
 
 <div class="fab-wrap"><div class="fab-inner">
   <button class="fab-sub" id="exportExcel" title="현재 목록 엑셀 다운로드">⬇</button>
+  <button class="fab-sub3" id="exportCompanyExcel" title="회사양식(입고전산) 엑셀 다운로드">🏭</button>
   <button class="fab-sub2" id="openExcelImport" title="엑셀로 반품 예정등록">📥</button>
   <button class="fab" id="openWizard" title="새 반품 등록">+</button>
 </div></div>
@@ -1273,23 +1276,60 @@ function extractGtinCandidate(text){
 // ===================== 실제 바코드 그래픽 디코딩 (실험적) ===================== //
 // 텍스트OCR 대신 진짜 바코드 스캔 라이브러리로 바코드 자체를 읽음 - GS1-128 바코드는 Code128 방식이라
 // (01)GTIN(10)LOT(17)EXP 전체가 바코드 하나에 다 들어있는 경우가 많음. 디코딩되면 훨씬 정확함.
-function decodeBarcodeFromImage(dataUrl){
+// 폰 카메라 원본은 해상도가 너무 크고 라벨이 세로로 찍히는 경우가 많아 Quagga가 못 찾는 경우가 많음.
+// 적정 크기로 리사이즈 + 0/90/180/270도 회전본을 만들어 순서대로 시도 (사용자 조작 없이 자동)
+function rotateAndResizeDataUrl(dataUrl, angleDeg, maxSize){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.onload = ()=>{
+      let w = img.width, h = img.height;
+      const scale = Math.min(1, maxSize / Math.max(w, h));
+      w = Math.round(w * scale); h = Math.round(h * scale);
+      const canvas = document.createElement('canvas');
+      const swap = (angleDeg === 90 || angleDeg === 270);
+      canvas.width = swap ? h : w;
+      canvas.height = swap ? w : h;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(angleDeg * Math.PI / 180);
+      ctx.drawImage(img, -w / 2, -h / 2, w, h);
+      ctx.restore();
+      resolve(canvas.toDataURL('image/jpeg', 0.92));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+function quaggaDecodeOnce(src){
   return new Promise((resolve)=>{
-    if(!window.Quagga){ resolve(null); return; }
     try{
       Quagga.decodeSingle({
-        decoder: { readers: ['code_128_reader', 'ean_reader'] },
+        decoder: { readers: ['code_128_reader', 'ean_reader', 'ean_8_reader', 'code_39_reader', 'upc_reader'] },
         locate: true,
-        src: dataUrl
+        inputStream: { size: 900 },
+        src
       }, function(result){
-        if(result && result.codeResult && result.codeResult.code){
-          resolve(result.codeResult.code);
-        } else {
-          resolve(null);
-        }
+        resolve(result && result.codeResult && result.codeResult.code ? result.codeResult.code : null);
       });
-    }catch(e){ console.warn('바코드 디코딩 실패:', e); resolve(null); }
+    }catch(e){ console.warn('바코드 디코딩 시도 실패:', e); resolve(null); }
   });
+}
+
+async function decodeBarcodeFromImage(dataUrl){
+  if(!window.Quagga) return null;
+  const angles = [0, 90, 270, 180];
+  for(const angle of angles){
+    try{
+      const src = angle === 0 ? await rotateAndResizeDataUrl(dataUrl, 0, 1000) : await rotateAndResizeDataUrl(dataUrl, angle, 1000);
+      const code = await quaggaDecodeOnce(src);
+      if(code) return code;
+    }catch(e){ console.warn(`바코드 ${angle}도 시도 실패:`, e); }
+  }
+  return null;
 }
 
 // 바코드에서 나온 원시 GS1 문자열(괄호 없이 AI코드+값이 붙어있는 형태)에서 GTIN/LOT/유효기간을 뽑아냄
@@ -3357,6 +3397,67 @@ function exportToExcel(){
   showToast(`${rows.length}건 엑셀로 다운로드 완료`);
 }
 
+// ===================== 엑셀 내보내기 (회사양식 · 입고전산 업로드용) ===================== //
+// 반품번호(주문번호) → 제품코드 → LOT 순으로 오름차순 정렬해서, 같은 제품이라도 LOT이 다르면 줄을 나눠서 내보냄.
+// 반품 사유 / QREM발송예정 / 비고는 항상 빈칸으로 남겨서 엑셀에서 직접 채우도록 함.
+
+function exportToCompanyFormat(){
+  const list = getFiltered();
+  if(list.length === 0){ showToast('내보낼 항목이 없어요'); return; }
+  const rows = [];
+
+  list.forEach(r => {
+    const receivedDate = r.confirmedAt ? fmtDate(r.confirmedAt).split(' ')[0] : '';
+    itemsOf(r).forEach(it => {
+      const lots = isExcelItem(it)
+        ? (Array.isArray(it.lots) ? it.lots : [])
+        : [{ lot: it.lot || '', expiryDate: it.expiryDate || '', quantity: it.quantity || '', status: it.status || '' }];
+
+      lots.forEach(l => {
+        rows.push({
+          '입고일자': receivedDate,
+          '주문번호': r.returnNumber || '',
+          '배송처코드': r.partnerCode || '',
+          '배송처명': r.hospitalName || '',
+          '제품코드': it.productCode || '',
+          '제품명': it.productName || '',
+          'LOT': l.lot || '',
+          '유효기간': l.expiryDate || '',
+          '기존': 'X',
+          '변경': l.status || '',
+          '수량': l.quantity || '',
+          '반품 사유': '',
+          'QREM발송예정': '',
+          '비고': ''
+        });
+      });
+    });
+  });
+
+  if(rows.length === 0){ showToast('내보낼 품목이 없어요'); return; }
+
+  // 반품번호 → 제품코드 → LOT 오름차순 정렬 (같은 제품이라도 LOT이 다르면 각각 줄이 나뉘어 보기 편하게 정리됨)
+  rows.sort((a, b) => {
+    const rn = String(a['주문번호']).localeCompare(String(b['주문번호']), 'ko');
+    if(rn !== 0) return rn;
+    const pc = String(a['제품코드']).localeCompare(String(b['제품코드']), 'ko');
+    if(pc !== 0) return pc;
+    return String(a['LOT']).localeCompare(String(b['LOT']), 'ko');
+  });
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [
+    {wch:12},{wch:14},{wch:14},{wch:24},{wch:12},{wch:30},
+    {wch:14},{wch:12},{wch:8},{wch:8},{wch:8},{wch:14},{wch:16},{wch:16}
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '입고전산양식');
+  const now = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  XLSX.writeFile(wb, `반품_입고전산양식_${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.xlsx`);
+  showToast(`${rows.length}건 회사양식으로 다운로드 완료`);
+}
+
 // ===================== 초기화 / 로그인 ===================== //
 
 function applyGuestModeUI(){
@@ -3390,6 +3491,7 @@ document.getElementById('masterBtn').addEventListener('click', openMasterModal);
 document.getElementById('partnerBtn').addEventListener('click', openPartnerModal);
 document.getElementById('productCatalogBtn').addEventListener('click', openProductCatalogModal);
 document.getElementById('exportExcel').addEventListener('click', exportToExcel);
+document.getElementById('exportCompanyExcel').addEventListener('click', exportToCompanyFormat);
 document.getElementById('logoutBtn').addEventListener('click', ()=>{
   showAppConfirm('로그아웃 할까요?', '로그아웃', async ()=>{ await window.fbLogout(); });
 });
