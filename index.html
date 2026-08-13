@@ -546,6 +546,7 @@ function render(){
     const shown = its.slice(0, 3);
     const moreCount = its.length - shown.length;
     const mismatchCount = its.reduce((sum, it) => sum + (Array.isArray(it.lots) ? it.lots.filter(l => l.codeMismatch).length : 0), 0);
+    const mismatchCodes = [...new Set(its.flatMap(it => Array.isArray(it.lots) ? it.lots.filter(l => l.codeMismatch).map(l => l.codeMismatch.scannedCode) : []))];
     return `
     <div class="card ${r.status}">
       <div class="card-inner">
@@ -556,7 +557,7 @@ function render(){
           </div>
           <span class="badge ${r.status}">${STATUS_ICON[r.status]} ${STATUS_LABEL[r.status]}</span>
         </div>
-        ${mismatchCount > 0 ? `<div style="font-size:11px; font-weight:700; color:var(--danger); background:#FBEAE8; padding:5px 9px; border-radius:8px; margin-top:6px; display:inline-block;">⚠️ 제품코드 불일치 LOT ${mismatchCount}건</div>` : ''}
+        ${mismatchCount > 0 ? `<div style="font-size:11px; font-weight:700; color:var(--danger); background:#FBEAE8; padding:5px 9px; border-radius:8px; margin-top:6px; display:inline-block;">⚠️ 제품코드 불일치 LOT ${mismatchCount}건 (${mismatchCodes.map(c=>escapeHtml(c)).join(', ')})</div>` : ''}
         <div class="meta-row">
           <span>등록 <b>${escapeHtml(r.registeredBy)}</b></span>
           <span>${fmtDate(r.registeredAt)}</span>
@@ -1583,6 +1584,23 @@ function normalizeCodeForMatch(s){
   if(!s) return '';
   return s.toString().toUpperCase().replace(/[\s\-_.\/]/g, '')
     .replace(/O/g, '0').replace(/I/g, '1').replace(/L/g, '1').replace(/S/g, '5').replace(/B/g, '8'); // 흔한 OCR 혼동 문자 보정
+}
+
+// 스캔/OCR로 읽은 코드와 예정 제품코드를 비교. 완전일치가 아니어도, 한쪽이 다른 쪽의 "뒷부분"과 정확히 겹치면
+// (예: OCR이 앞자리 F를 놓쳐서 "00005444"만 읽음 → 예정코드 "F00005444"의 뒷부분과 정확히 일치) 같은 제품으로 인정함.
+// 단, 겹치는 길이가 너무 짧으면(예: 4자리만) 다른 제품과도 우연히 겹칠 수 있어서 "애매함"으로 분류해 자동 확정하지 않음.
+// 반환: 'match' | 'ambiguous' | 'mismatch'
+function compareCodeMatch(scanned, expected, minConfidentOverlap){
+  const ns = normalizeCodeForMatch(scanned);
+  const ne = normalizeCodeForMatch(expected);
+  if(!ns || !ne) return 'mismatch';
+  if(ns === ne) return 'match';
+  const overlapLen = Math.min(ns.length, ne.length);
+  const suffixOverlaps = ne.endsWith(ns) || ns.endsWith(ne);
+  if(suffixOverlaps){
+    return overlapLen >= (minConfidentOverlap || 6) ? 'match' : 'ambiguous';
+  }
+  return 'mismatch';
 }
 
 // 카탈로그 전체에서 OCR 후보 코드와 가장 비슷한 항목들을 찾아 점수순으로 반환
@@ -2748,6 +2766,42 @@ let lotDraftMismatch = null; // 이 LOT을 추가하는 동안 감지된 제품�
 let lotFieldAutoFilled = false;
 let expFieldAutoFilled = false;
 
+// LOT 추가 모달의 "제품코드 확인 검색" - 사용자가 직접 코드 일부를 검색해서 실물과 대조할 수 있게 함.
+// OCR/바코드가 짧은 뒷자리만 읽어서 애매한 경우에도 여기서 직접 확인·선택 가능.
+function renderAlCodeSearchResult(query, expectedCode){
+  const el = document.getElementById('al_codeSearchResult');
+  if(!el) return;
+  const q = (query || '').trim();
+  if(!q){ el.style.display = 'none'; el.innerHTML = ''; return; }
+  const normQ = normalizeCodeForMatch(q);
+  const matches = (productCatalogCache || []).filter(c =>
+    normalizeCodeForMatch(c.code).includes(normQ) || (c.name || '').toUpperCase().includes(q.toUpperCase())
+  ).slice(0, 8);
+  if(matches.length === 0){ el.style.display = 'block'; el.innerHTML = `<div class="hint">일치하는 제품마스터 항목이 없어요</div>`; return; }
+  el.style.display = 'block';
+  el.innerHTML = matches.map(c => {
+    const isExpected = normalizeCodeForMatch(c.code) === normalizeCodeForMatch(expectedCode);
+    return `<div class="suggest-item" data-code="${escapeHtml(c.code)}" style="cursor:pointer; padding:7px 10px; border:1px solid ${isExpected ? 'var(--green)' : 'var(--line)'}; border-radius:8px; margin-bottom:5px; font-size:12.5px;">
+      <b>${escapeHtml(c.code)}</b> ${isExpected ? '<span style="color:var(--green); font-weight:700;">· 예정 코드와 일치</span>' : ''}
+      <div style="color:var(--ink-muted); font-size:11.5px;">${escapeHtml(c.name || '')}</div>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('[data-code]').forEach(elx => {
+    elx.addEventListener('click', ()=>{
+      const chosenCode = elx.dataset.code;
+      const resultEl = document.getElementById('al_resultMsg');
+      if(normalizeCodeForMatch(chosenCode) === normalizeCodeForMatch(expectedCode)){
+        lotDraftMismatch = null;
+        if(resultEl){ resultEl.style.display = 'block'; resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--green); background:var(--green-bg); padding:8px 10px; border-radius:8px;">✅ 선택하신 코드(${escapeHtml(chosenCode)})가 예정 제품코드와 일치해요</div>`; }
+      } else {
+        lotDraftMismatch = { scannedCode: chosenCode, expectedCode, source: '수동확인' };
+        if(resultEl){ resultEl.style.display = 'block'; resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--danger); background:#FBEAE8; padding:8px 10px; border-radius:8px;">⚠️ 선택하신 코드(${escapeHtml(chosenCode)})가 예정 제품코드(${escapeHtml(expectedCode)})와 달라요</div>`; }
+      }
+      showToast('제품코드 확인 결과가 반영됐어요');
+    });
+  });
+}
+
 async function openAddLotModal(recordId, itemId){
   closeOverlay('addLotOverlay');
   const rec = records.find(r => r.id === recordId);
@@ -2772,6 +2826,11 @@ async function openAddLotModal(recordId, itemId){
     <input type="file" id="al_photoInput" accept="image/*" style="display:none;">
     <div id="al_progress" style="display:none;"><div class="ocr-progress">🔄 분석 중...</div></div>
     <div id="al_resultMsg" style="display:none;"></div>
+    <div class="field" style="position:relative;">
+      <label>제품코드 확인 (검색해서 대조)</label>
+      <input id="al_codeSearch" type="text" autocomplete="off" placeholder="제품코드 뒷자리로 검색해서 실물과 대조해보세요">
+      <div id="al_codeSearchResult" style="display:none; margin-top:6px;"></div>
+    </div>
     <div class="field" style="margin-top:14px;"><label>제조번호(LOT) *</label><input id="al_lot" type="text" autocomplete="off" placeholder="실물 라벨의 LOT 번호"></div>
     <div id="al_lotCandidates" style="display:none; margin:-4px 0 10px;"></div>
     <div class="field"><label>유효기간</label><input id="al_expiryDate" type="text" autocomplete="off" placeholder="예: 2028.03 → 2028.03.31"></div>
@@ -2791,6 +2850,9 @@ async function openAddLotModal(recordId, itemId){
   // 사용자가 직접 타이핑하면 그 순간부터는 "자동입력됨" 상태를 해제해서, 이후 재촬영해도 덮어쓰지 않음
   document.getElementById('al_lot').addEventListener('input', ()=>{ lotFieldAutoFilled = false; });
   document.getElementById('al_expiryDate').addEventListener('input', ()=>{ expFieldAutoFilled = false; });
+
+  window.fbListCatalogItems().then(list => { productCatalogCache = list; });
+  document.getElementById('al_codeSearch').addEventListener('input', (e)=> renderAlCodeSearchResult(e.target.value, it.productCode));
 
   const addBtn = document.getElementById('al_addPhotoBtn');
   const photoInput = document.getElementById('al_photoInput');
@@ -2843,8 +2905,11 @@ async function openAddLotModal(recordId, itemId){
           const masterHit = await window.fbGetProductMaster(gs1Result.gtin.slice(-6));
           if(lotDraftGen !== myGen) return;
           if(masterHit && masterHit.productCode){
-            if(normalizeCodeForMatch(masterHit.productCode) === normalizeCodeForMatch(it.productCode)){
+            const bcMatch = compareCodeMatch(masterHit.productCode, it.productCode, 6);
+            if(bcMatch === 'match'){
               barcodeFound.push('바코드 제품코드 일치 확인');
+            } else if(bcMatch === 'ambiguous'){
+              barcodeFound.push(`🔎 바코드 매핑 코드(${masterHit.productCode}) 뒷자리만 겹쳐요 - 아래 제품코드 검색으로 확인해주세요`);
             } else {
               barcodeFound.push(`⚠️ 바코드 매핑 제품코드(${masterHit.productCode})가 예정 제품코드와 달라요`);
               lotDraftMismatch = { scannedCode: masterHit.productCode, expectedCode: it.productCode, source: '바코드' };
@@ -2861,12 +2926,16 @@ async function openAddLotModal(recordId, itemId){
 
       const codeGuess = extractProductCodeGuess(combined);
       let mismatchWarn = '';
+      let ambiguousCodeInfo = null;
       if(codeGuess){
-        if(normalizeCodeForMatch(codeGuess) !== normalizeCodeForMatch(it.productCode)){
+        const matchResult = compareCodeMatch(codeGuess, it.productCode, 6);
+        if(matchResult === 'match'){
+          found.push('제품코드 일치 확인');
+        } else if(matchResult === 'ambiguous'){
+          ambiguousCodeInfo = { scannedCode: codeGuess, expectedCode: it.productCode };
+        } else {
           mismatchWarn = `⚠️ 사진에서 읽은 코드(${escapeHtml(codeGuess)})가 예정 제품코드(${escapeHtml(it.productCode)})와 달라요 - 실물을 다시 확인해주세요!`;
           lotDraftMismatch = { scannedCode: codeGuess, expectedCode: it.productCode, source: '텍스트' };
-        } else {
-          found.push('제품코드 일치 확인');
         }
       }
 
@@ -2898,7 +2967,14 @@ async function openAddLotModal(recordId, itemId){
         const barcodeFailNote = barcodeDecodeFailed
           ? `<div style="font-size:11.5px; font-weight:600; color:var(--amber); background:var(--amber-bg); padding:7px 10px; border-radius:8px; margin-top:6px;">📷 바코드 막대 인식은 실패했어요 (텍스트 인식으로만 채워졌어요) - 바코드 주변에 여백을 두고 정면에서 다시 찍으면 인식률이 올라가요</div>`
           : '';
-        if(mismatchWarn){
+        if(ambiguousCodeInfo){
+          resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--amber); background:var(--amber-bg); padding:8px 10px; border-radius:8px;">🔎 코드 뒷자리만 인식됐어요(${escapeHtml(ambiguousCodeInfo.scannedCode)}) - 위 "제품코드 확인" 검색창에서 실제 코드를 찾아 선택해주세요</div>${barcodeFailNote}${debugHtml}`;
+          const codeSearchInput = document.getElementById('al_codeSearch');
+          if(codeSearchInput && !codeSearchInput.value.trim()){
+            codeSearchInput.value = ambiguousCodeInfo.scannedCode;
+            renderAlCodeSearchResult(ambiguousCodeInfo.scannedCode, it.productCode);
+          }
+        } else if(mismatchWarn){
           resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--danger); background:#FBEAE8; padding:8px 10px; border-radius:8px;">${mismatchWarn}</div>${barcodeFailNote}${debugHtml}`;
         } else if(found.length > 0){
           resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--green); background:var(--green-bg); padding:8px 10px; border-radius:8px;">✅ ${escapeHtml(found.join(' · '))}</div>${barcodeFailNote}${debugHtml}`;
