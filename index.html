@@ -1803,6 +1803,36 @@ function findValueNearLabel(lines, upperLines, labelUp, matcher){
   return '';
 }
 
+// GS1 바코드 밑에 인쇄되는 "사람이 읽는 텍스트"(HRI)를 통째로 파싱함: (01)GTIN(10)LOT(17)유효기간
+// 라벨 글자("LOT", "유효기간" 등)가 전혀 없어도, 이 괄호+숫자 코드만으로 3개 값을 한번에 뽑아낼 수 있음.
+// 순서가 뒤바뀌거나 일부만 있어도 되도록 각 AI코드를 독립적으로 찾음. 줄바꿈/공백은 OCR이 임의로 넣을 수 있어서 제거하고 검사.
+function extractGs1FromOcrText(text){
+  const result = { gtin: '', lot: '', expiryDate: '' };
+  if(!text) return result;
+  const flat = text.replace(/\s+/g, '');
+
+  const gtinM = flat.match(/\(01\)(\d{14})/);
+  if(gtinM) result.gtin = gtinM[1];
+
+  const expM = flat.match(/\(17\)(\d{6,8})/);
+  if(expM){
+    const raw = expM[1];
+    let y, mo, d;
+    if(raw.length >= 8){
+      y = parseInt(raw.slice(0,4), 10); mo = parseInt(raw.slice(4,6), 10); d = parseInt(raw.slice(6,8), 10);
+    } else {
+      y = 2000 + parseInt(raw.slice(0,2), 10); mo = parseInt(raw.slice(2,4), 10); d = parseInt(raw.slice(4,6), 10);
+    }
+    if(mo >= 1 && mo <= 12) result.expiryDate = formatExpiryParts(y, mo, d || null);
+  }
+
+  // (10) 다음 값은 다음 AI코드(괄호+2자리숫자)가 나오기 전까지, 없으면 끝까지 (최대 15자)
+  const lotM = flat.match(/\(10\)([A-Za-z0-9]{2,15}?)(?=\(\d{2}\)|$)/);
+  if(lotM && lotM[1]) result.lot = lotM[1].toUpperCase();
+
+  return result;
+}
+
 function extractProductCodeGuess(text){
   if(!text) return '';
   const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
@@ -1827,8 +1857,8 @@ function extractLotGuess(text){
     const val = findValueNearLabel(lines, upperLines, label.toUpperCase(), matchLotToken);
     if(val) return val;
   }
-  const gs1 = text.match(/\(10\)\s*([A-Za-z0-9]{4,15})/);
-  if(gs1) return gs1[1].toUpperCase();
+  const gs1 = extractGs1FromOcrText(text);
+  if(gs1.lot) return gs1.lot;
   return '';
 }
 
@@ -1880,9 +1910,13 @@ function extractExpiryGuess(text){
       if(dp) return formatExpiryParts(dp.y, dp.mo, dp.d);
     }
   }
-  // 라벨(사용기한/유효기간 등)을 못 찾은 경우 - 제조연월·사용기한이 아이콘으로만 표시돼서 텍스트 라벨 자체가
-  // OCR에 안 잡히는 라벨 형식의 실물 라벨이 실제로 있음. 이런 경우 사용기한은 항상 제조연월보다 나중 날짜라는
-  // 점(규정상 항상 성립)을 이용해서, 텍스트 전체에서 날짜를 다 찾아 가장 늦은 날짜를 사용기한으로 추정함.
+  // 라벨(사용기한/유효기간 등)을 못 찾은 경우 - GS1 바코드 밑에 찍힌 (17)유효기간 코드를 직접 찾아봄
+  // (라벨 글자가 아이콘으로만 표시돼서 텍스트가 아예 없는 실물 라벨에서도 이 코드는 대부분 같이 찍혀있음)
+  const gs1 = extractGs1FromOcrText(text);
+  if(gs1.expiryDate) return gs1.expiryDate;
+
+  // 그래도 못 찾았으면, 사용기한은 항상 제조연월보다 나중 날짜라는 점(규정상 항상 성립)을 이용해서
+  // 텍스트 전체에서 날짜를 다 찾아 가장 늦은 날짜를 사용기한으로 추정함.
   // 날짜가 1개뿐이면(제조연월만 잡힌 경우 등) 잘못 지정할 위험이 커서 폴백을 적용하지 않음.
   const allDates = [];
   for(const line of lines){
@@ -3410,17 +3444,30 @@ async function openAddLotModal(recordId, itemId){
       if(!lotEl || !expEl) return;
 
       const codeGuess = extractProductCodeGuess(combined);
+      let resolvedCodeGuess = codeGuess;
+      let codeSource = '텍스트';
+      if(!resolvedCodeGuess){
+        // "REF"/"제품코드" 같은 라벨을 못 찾았으면, 바코드 밑에 찍힌 (01)GTIN 코드로 제품마스터 조회를 시도함
+        const gs1Text = extractGs1FromOcrText(combined);
+        if(gs1Text.gtin){
+          const masterHit = await window.fbGetProductMaster(gs1Text.gtin.slice(-6));
+          if(masterHit && masterHit.productCode){
+            resolvedCodeGuess = masterHit.productCode;
+            codeSource = 'GS1코드';
+          }
+        }
+      }
       let mismatchWarn = '';
       let ambiguousCodeInfo = null;
-      if(codeGuess){
-        const matchResult = compareCodeMatch(codeGuess, it.productCode, 6);
+      if(resolvedCodeGuess){
+        const matchResult = compareCodeMatch(resolvedCodeGuess, it.productCode, 6);
         if(matchResult === 'match'){
-          found.push('제품코드 일치 확인');
+          found.push(`제품코드 일치 확인${codeSource === 'GS1코드' ? ' (GS1코드)' : ''}`);
         } else if(matchResult === 'ambiguous'){
-          ambiguousCodeInfo = { scannedCode: codeGuess, expectedCode: it.productCode };
+          ambiguousCodeInfo = { scannedCode: resolvedCodeGuess, expectedCode: it.productCode };
         } else {
-          mismatchWarn = `⚠️ 사진에서 읽은 코드(${escapeHtml(codeGuess)})가 예정 제품코드(${escapeHtml(it.productCode)})와 달라요 - 실물을 다시 확인해주세요!`;
-          lotDraftMismatch = { scannedCode: codeGuess, expectedCode: it.productCode, source: '텍스트' };
+          mismatchWarn = `⚠️ 사진에서 읽은 코드(${escapeHtml(resolvedCodeGuess)})가 예정 제품코드(${escapeHtml(it.productCode)})와 달라요 - 실물을 다시 확인해주세요!`;
+          lotDraftMismatch = { scannedCode: resolvedCodeGuess, expectedCode: it.productCode, source: codeSource };
         }
       }
 
