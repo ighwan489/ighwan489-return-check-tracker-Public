@@ -1108,8 +1108,9 @@ async function openDetail(id){
   const TYPE_LABEL = { receipt:'📄 인수증 원본', zoom:'🔍 반품번호·반품처 확대' };
 
   let html = '';
+  html += `<div class="item-section-title">인수증 사진</div>`;
   if(receiptPhotos.length > 0){
-    html += `<div class="item-section-title">인수증 사진</div><div class="cert-gallery">`;
+    html += `<div class="cert-gallery">`;
     html += receiptPhotos.map(p => `
       <div class="cert-gallery-item">
         <img src="${p.data}" alt="사진" onclick="window.open('${p.data}','_blank')">
@@ -1119,6 +1120,12 @@ async function openDetail(id){
         </div>
       </div>`).join('');
     html += `</div>`;
+  } else {
+    html += `<div class="hint" style="margin-bottom:8px;">아직 첨부된 인수증 사진이 없어요</div>`;
+  }
+  if(!isGuestMode){
+    html += `<button class="btn-cancel" style="width:100%; margin-bottom:16px;" onclick="document.getElementById('detailReceiptInput').click()">📎 인수증 사진 첨부</button>
+    <input type="file" id="detailReceiptInput" accept="image/*" style="display:none;">`;
   }
 
   its.forEach(it => {
@@ -1188,10 +1195,34 @@ async function openDetail(id){
     }
   });
 
-  if(its.length === 0 && receiptPhotos.length === 0){
+  if(its.length === 0 && receiptPhotos.length === 0 && isGuestMode){
     html = `<div class="hint" style="text-align:center; padding:20px;">등록된 품목·사진이 없어요</div>`;
+  } else if(its.length === 0){
+    html += `<div class="hint" style="text-align:center; padding:12px 0;">등록된 품목이 없어요</div>`;
   }
   body.innerHTML = html;
+  const receiptInput = document.getElementById('detailReceiptInput');
+  if(receiptInput){
+    receiptInput.addEventListener('change', async ()=>{
+      if(!receiptInput.files.length) return;
+      const file = receiptInput.files[0];
+      const reader = new FileReader();
+      reader.onload = async (e)=>{
+        showToast('인수증 사진 업로드 중...');
+        const c = await compressPhoto(e.target.result);
+        const pid = await window.fbAddPhoto(id, null, 'receipt', c);
+        if(pid){
+          const rec = records.find(r => r.id === id);
+          if(rec){ rec.photoCount = (rec.photoCount || 0) + 1; await window.fbUpdateRecord(id, { photoCount: rec.photoCount }); render(); }
+          showToast('인수증 사진이 첨부됐어요');
+          openDetail(id);
+        } else {
+          showToast('업로드에 실패했어요');
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  }
 }
 
 async function deletePhotoFromDetail(recordId, photoId){
