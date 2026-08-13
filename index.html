@@ -571,7 +571,7 @@ function render(){
               const expected = parseFloat(it.expectedQuantity) || 0;
               const complete = expected > 0 && verified >= expected;
               const lotCount = Array.isArray(it.lots) ? it.lots.length : 0;
-              return `<div class="item-chip"><span class="ic-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')}${complete ? ' <span style="color:var(--green); font-weight:700;">✓완료</span>' : ''}</span><span class="ic-lot">${verified}/${expected}개 · LOT ${lotCount}건</span></div>`;
+              return `<div class="item-chip"><span class="ic-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')}${complete ? ' <span style="color:var(--green); font-weight:700;">✓완료</span>' : ''}</span><span class="ic-lot">${escapeHtml(it.productCode || '')} · ${verified}/${expected}개 · LOT ${lotCount}건</span></div>`;
             }
             const st = it.status || 'A';
             return `<div class="item-chip"><span class="ic-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')} <span style="font-size:9.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st] || 'var(--ink-muted)'}; padding:1px 6px; border-radius:8px;">${st}</span></span><span class="ic-lot">${escapeHtml(it.lot || '-')}</span></div>`;
@@ -1414,6 +1414,11 @@ function parseGs1Raw(raw){
       s = s.slice(1); // 못 알아본 문자(FNC1 제어문자 등)는 건너뜀
     }
   }
+  // 바코드 그래픽 디코딩이 부분적으로 깨지면 LOT에 따옴표·플러스·느낌표 같은 이상한 문자가 섞여 들어올 수 있음.
+  // 실제 GS1 LOT은 영문/숫자(+하이픈) 조합만 나오므로, 그 외 문자가 섞이면 신뢰할 수 없는 값으로 보고 버림 (오탐 방지)
+  if(result.lot && !/^[A-Za-z0-9\-]{1,20}$/.test(result.lot)){
+    result.lot = '';
+  }
   return result;
 }
 
@@ -1520,9 +1525,9 @@ function formatExpiryParts(y, mo, d){
 // 한 줄에서 YYYY-MM-DD / YYYY.MM.DD / YYYY/MM/DD 또는 YYYY-MM / YYYY.MM / YYYY/MM 형태의 날짜를 찾음
 function matchDateFlexible(line){
   if(!line) return null;
-  let m = line.match(/(20\d{2})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
+  let m = line.match(/(20\d{2})\s*[.\-\/]\s*(\d{1,2})\s*[.\-\/]\s*(\d{1,2})/);
   if(m) return { y: +m[1], mo: +m[2], d: +m[3] };
-  m = line.match(/(20\d{2})[.\-\/](\d{1,2})(?!\d)/);
+  m = line.match(/(20\d{2})\s*[.\-\/]\s*(\d{1,2})(?!\d)/);
   if(m) return { y: +m[1], mo: +m[2], d: null };
   return null;
 }
@@ -1550,6 +1555,21 @@ function extractExpiryGuess(text){
       }
       if(dp) return formatExpiryParts(dp.y, dp.mo, dp.d);
     }
+  }
+  // 라벨(사용기한/유효기간 등)을 못 찾은 경우 - 제조연월·사용기한이 아이콘으로만 표시돼서 텍스트 라벨 자체가
+  // OCR에 안 잡히는 라벨 형식의 실물 라벨이 실제로 있음. 이런 경우 사용기한은 항상 제조연월보다 나중 날짜라는
+  // 점(규정상 항상 성립)을 이용해서, 텍스트 전체에서 날짜를 다 찾아 가장 늦은 날짜를 사용기한으로 추정함.
+  // 날짜가 1개뿐이면(제조연월만 잡힌 경우 등) 잘못 지정할 위험이 커서 폴백을 적용하지 않음.
+  const allDates = [];
+  for(const line of lines){
+    const dp = matchDateFlexible(line);
+    if(dp) allDates.push(dp);
+  }
+  if(allDates.length >= 2){
+    const withTime = allDates.map(dp => ({ dp, t: new Date(dp.y, dp.mo - 1, dp.d || 1).getTime() }));
+    withTime.sort((a,b) => b.t - a.t);
+    const latest = withTime[0].dp;
+    return formatExpiryParts(latest.y, latest.mo, latest.d);
   }
   return '';
 }
@@ -2725,6 +2745,8 @@ async function deleteLotFromItem(recordId, itemId, lotId){
 let lotDraftGen = 0;
 let lotDraftPhotos = [];
 let lotDraftMismatch = null; // 이 LOT을 추가하는 동안 감지된 제품코드 불일치 정보 (있으면 LOT에 같이 저장돼서 검수완료 시에도 계속 보임)
+let lotFieldAutoFilled = false;
+let expFieldAutoFilled = false;
 
 async function openAddLotModal(recordId, itemId){
   closeOverlay('addLotOverlay');
@@ -2735,6 +2757,8 @@ async function openAddLotModal(recordId, itemId){
   if(!it) return;
   lotDraftPhotos = [];
   lotDraftMismatch = null;
+  lotFieldAutoFilled = false; // LOT 필드가 사용자 직접입력이 아니라 OCR/바코드 자동입력인지 - 재촬영 시 덮어쓸지 판단용
+  expFieldAutoFilled = false;
   lotDraftGen++;
   const myGen = lotDraftGen;
 
@@ -2764,6 +2788,10 @@ async function openAddLotModal(recordId, itemId){
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('addLotOverlay'); });
 
+  // 사용자가 직접 타이핑하면 그 순간부터는 "자동입력됨" 상태를 해제해서, 이후 재촬영해도 덮어쓰지 않음
+  document.getElementById('al_lot').addEventListener('input', ()=>{ lotFieldAutoFilled = false; });
+  document.getElementById('al_expiryDate').addEventListener('input', ()=>{ expFieldAutoFilled = false; });
+
   const addBtn = document.getElementById('al_addPhotoBtn');
   const photoInput = document.getElementById('al_photoInput');
   addBtn.addEventListener('click', ()=> photoInput.click());
@@ -2789,19 +2817,26 @@ async function openAddLotModal(recordId, itemId){
       // 실제 바코드 그래픽 디코딩 시도 (텍스트 OCR보다 훨씬 정확함 - 성공하면 최우선 적용)
       const barcodeRaw = await decodeBarcodeFromImage(dataUrl);
       if(lotDraftGen !== myGen) return;
-      const barcodeDecodeFailed = !barcodeRaw;
+      const barcodeDecodeFailedInit = !barcodeRaw;
+      let barcodeDecodeFailed = barcodeDecodeFailedInit;
       let barcodeFound = [];
       let gs1Result = null;
       if(barcodeRaw){
         gs1Result = parseGs1Raw(barcodeRaw);
+        if(!gs1Result.lot && !gs1Result.expiryDate && !gs1Result.gtin){
+          // 바코드 그래픽은 뭔가 읽었지만 파싱 결과가 전부 비었다면(디코딩이 깨진 경우) 사실상 실패로 취급
+          barcodeDecodeFailed = true;
+        }
         const lotElBc = document.getElementById('al_lot');
         const expElBc = document.getElementById('al_expiryDate');
-        if(gs1Result.lot && lotElBc && !lotElBc.value.trim()){
+        if(gs1Result.lot && lotElBc && (!lotElBc.value.trim() || lotFieldAutoFilled)){
           lotElBc.value = gs1Result.lot;
+          lotFieldAutoFilled = true;
           barcodeFound.push(`LOT(바코드스캔) ${gs1Result.lot}`);
         }
-        if(gs1Result.expiryDate && expElBc && !expElBc.value.trim()){
+        if(gs1Result.expiryDate && expElBc && (!expElBc.value.trim() || expFieldAutoFilled)){
           expElBc.value = gs1Result.expiryDate;
+          expFieldAutoFilled = true;
           barcodeFound.push(`유효기간(바코드스캔) ${gs1Result.expiryDate}`);
         }
         if(gs1Result.gtin){
@@ -2836,9 +2871,9 @@ async function openAddLotModal(recordId, itemId){
       }
 
       const lotCandEl = document.getElementById('al_lotCandidates');
-      if(!lotEl.value.trim()){
+      if(!lotEl.value.trim() || lotFieldAutoFilled){
         const lotGuess = extractLotGuess(combined);
-        if(lotGuess){ lotEl.value = lotGuess; found.push(`LOT ${lotGuess}`); if(lotCandEl){ lotCandEl.style.display='none'; lotCandEl.innerHTML=''; } }
+        if(lotGuess){ lotEl.value = lotGuess; lotFieldAutoFilled = true; found.push(`LOT ${lotGuess}`); if(lotCandEl){ lotCandEl.style.display='none'; lotCandEl.innerHTML=''; } }
         else if(lotCandEl){
           const candidates = extractLotCandidates(combined, it.productCode);
           if(candidates.length > 0){
@@ -2846,14 +2881,14 @@ async function openAddLotModal(recordId, itemId){
             lotCandEl.innerHTML = `<div class="hint" style="margin-bottom:4px;">🔎 후보 (탭해서 선택):</div>` +
               candidates.map((c,ci)=>`<span class="suggest-item" style="display:inline-block; width:auto; border:1px solid var(--line); border-radius:16px; padding:5px 12px; margin:2px 4px 2px 0;" data-c="${ci}">${escapeHtml(c)}</span>`).join('');
             lotCandEl.querySelectorAll('[data-c]').forEach(elx=>{
-              elx.addEventListener('click', ()=>{ lotEl.value = candidates[parseInt(elx.dataset.c,10)]; lotCandEl.style.display='none'; lotCandEl.innerHTML=''; });
+              elx.addEventListener('click', ()=>{ lotEl.value = candidates[parseInt(elx.dataset.c,10)]; lotFieldAutoFilled = false; lotCandEl.style.display='none'; lotCandEl.innerHTML=''; });
             });
           }
         }
       }
-      if(!expEl.value.trim()){
+      if(!expEl.value.trim() || expFieldAutoFilled){
         const dateGuess = extractExpiryGuess(combined);
-        if(dateGuess){ expEl.value = dateGuess; found.push(`유효기간 ${dateGuess}`); }
+        if(dateGuess){ expEl.value = dateGuess; expFieldAutoFilled = true; found.push(`유효기간 ${dateGuess}`); }
       }
 
       const resultEl = document.getElementById('al_resultMsg');
@@ -3616,12 +3651,14 @@ async function exportToCompanyFormat(){
         : [{ lot: it.lot || '', expiryDate: it.expiryDate || '', quantity: it.quantity || '', status: it.status || '' }];
 
       lots.forEach(l => {
+        const mismatch = l.codeMismatch;
         rows.push({
           '입고일자': receivedDate,
           '주문번호': r.returnNumber || '',
           '배송처코드': partnerCode,
           '배송처명': partnerName,
           '제품코드': it.productCode || '',
+          '확인된제품코드': mismatch ? mismatch.scannedCode : '',
           '제품명': it.productName || '',
           'LOT': l.lot || '',
           '유효기간': l.expiryDate || '',
@@ -3630,7 +3667,7 @@ async function exportToCompanyFormat(){
           '수량': l.quantity || '',
           '반품 사유': '',
           'QREM발송예정': '',
-          '비고': ''
+          '비고': mismatch ? `${mismatch.expectedCode}에서 ${mismatch.scannedCode}로 변경됨` : ''
         });
       });
     });
@@ -3649,8 +3686,8 @@ async function exportToCompanyFormat(){
 
   const ws = XLSX.utils.json_to_sheet(rows);
   ws['!cols'] = [
-    {wch:12},{wch:14},{wch:14},{wch:24},{wch:12},{wch:30},
-    {wch:14},{wch:12},{wch:8},{wch:8},{wch:8},{wch:14},{wch:16},{wch:16}
+    {wch:12},{wch:14},{wch:14},{wch:24},{wch:12},{wch:14},{wch:30},
+    {wch:14},{wch:12},{wch:8},{wch:8},{wch:8},{wch:14},{wch:16},{wch:20}
   ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '입고전산양식');
