@@ -213,7 +213,13 @@
   .header-top{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
   .header-top > div:first-child{ min-width:0; flex:1 1 auto; }
   .header-top .logout-btn{ flex:0 0 auto; }
-  .admin-btn-row{ display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .master-menu-list{ display:flex; flex-direction:column; gap:10px; }
+  .master-menu-item{ display:flex; align-items:center; gap:12px; width:100%; text-align:left; padding:14px 14px; border-radius:12px; border:1px solid var(--line); background:#FBFCFD; cursor:pointer; }
+  .master-menu-item:hover{ background:#F1F3F5; border-color:var(--steel); }
+  .master-menu-item .mm-icon{ font-size:22px; flex-shrink:0; width:34px; text-align:center; }
+  .master-menu-item .mm-text{ display:flex; flex-direction:column; gap:2px; }
+  .master-menu-item .mm-text b{ font-size:14px; color:var(--ink); }
+  .master-menu-item .mm-text small{ font-size:11.5px; color:var(--ink-muted); font-weight:500; }
   h1{ font-family:'Space Grotesk',sans-serif; font-weight:700; letter-spacing:.01em; font-size:22px; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .subtitle{ font-size:12px; color:#B9C7D4; margin-top:2px; font-weight:500; }
   .logout-btn{ background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.22); color:#DCE5EC; font-size:11.5px; font-weight:600; padding:6px 11px; border-radius:8px; cursor:pointer; white-space:nowrap; }
@@ -236,6 +242,7 @@
   .tab.active[data-filter="pending"]{ background:var(--amber); color:#fff; }
   .tab.active[data-filter="expected"]{ background:var(--steel); color:#fff; }
   .tab.active[data-filter="confirmed"]{ background:var(--green); color:#fff; }
+  .tab.active[data-filter="master"]{ background:var(--steel-dark); color:#fff; }
 
   .list{ padding:16px 14px 0; display:flex; flex-direction:column; gap:10px; }
   .empty{ text-align:center; padding:60px 20px; color:var(--ink-muted); }
@@ -271,17 +278,22 @@
   .btn-del:hover{ color:var(--danger); border-color:var(--danger); }
   .btn-edit{ background:none; color:var(--steel); border:1px solid var(--line); }
 
-  .fab{ position:fixed; right:20px; bottom:20px; z-index:30; width:56px; height:56px; border-radius:50%; border:none; background:var(--amber); color:#fff; font-size:26px; font-weight:700; box-shadow:0 4px 14px rgba(180,83,10,.4); cursor:pointer; display:flex; align-items:center; justify-content:center; max-width:720px; margin:0 auto; }
-  .fab-sub{ position:fixed; right:20px; bottom:88px; z-index:30; width:44px; height:44px; border-radius:50%; border:none; background:var(--steel); color:#fff; font-size:18px; box-shadow:0 4px 14px rgba(44,74,102,.35); cursor:pointer; display:flex; align-items:center; justify-content:center; max-width:720px; margin:0 auto; }
-  .fab-sub2{ position:fixed; right:20px; bottom:156px; z-index:30; width:44px; height:44px; border-radius:50%; border:none; background:var(--green); color:#fff; font-size:18px; box-shadow:0 4px 14px rgba(21,115,71,.35); cursor:pointer; display:flex; align-items:center; justify-content:center; max-width:720px; margin:0 auto; }
-  .fab-sub3{ position:fixed; right:20px; bottom:224px; z-index:30; width:44px; height:44px; border-radius:50%; border:none; background:var(--steel); color:#fff; font-size:18px; box-shadow:0 4px 14px rgba(44,74,102,.35); cursor:pointer; display:flex; align-items:center; justify-content:center; max-width:720px; margin:0 auto; }
+  .fab-toggle{ position:fixed; right:20px; bottom:20px; z-index:31; width:56px; height:56px; border-radius:50%; border:none; background:var(--amber); color:#fff; font-size:26px; font-weight:700; box-shadow:0 4px 14px rgba(180,83,10,.4); cursor:pointer; display:flex; align-items:center; justify-content:center; max-width:720px; margin:0 auto; transition:transform .2s ease, background .2s ease; }
+  .fab-toggle.open{ transform:rotate(45deg); background:var(--steel-dark); }
+  .fab-backdrop{ position:fixed; inset:0; z-index:29; background:rgba(20,26,33,.25); opacity:0; pointer-events:none; transition:opacity .18s ease; }
+  .fab-backdrop.open{ opacity:1; pointer-events:auto; }
+  .fab-menu{ position:fixed; right:20px; bottom:88px; z-index:30; display:flex; flex-direction:column-reverse; align-items:flex-end; gap:12px; opacity:0; pointer-events:none; transform:translateY(10px); transition:opacity .18s ease, transform .18s ease; max-width:720px; margin:0 auto; }
+  .fab-menu.open{ opacity:1; pointer-events:auto; transform:translateY(0); }
+  .fab-item{ display:flex; align-items:center; gap:10px; }
+  .fab-item .fab-label{ background:var(--steel-dark); color:#fff; font-size:12px; font-weight:700; padding:7px 13px; border-radius:8px; white-space:nowrap; box-shadow:0 2px 8px rgba(0,0,0,.18); }
+  .fab-item button{ width:46px; height:46px; border-radius:50%; border:none; color:#fff; font-size:19px; cursor:pointer; display:flex; align-items:center; justify-content:center; box-shadow:0 4px 14px rgba(0,0,0,.25); flex-shrink:0; }
+  .fab-item button.i-primary{ background:var(--amber); }
+  .fab-item button.i-steel{ background:var(--steel); }
+  .fab-item button.i-green{ background:var(--green); }
+  .fab-item button.i-blue{ background:var(--blue); }
   .fab-wrap{ position:fixed; left:0; right:0; bottom:0; display:flex; justify-content:center; pointer-events:none; }
   .fab-wrap .fab-inner{ position:relative; width:100%; max-width:720px; height:0; pointer-events:none; }
-  .fab-wrap button{ pointer-events:auto; position:absolute; right:20px; }
-  .fab-wrap .fab{ bottom:20px; }
-  .fab-wrap .fab-sub{ bottom:88px; }
-  .fab-wrap .fab-sub2{ bottom:156px; }
-  .fab-wrap .fab-sub3{ bottom:224px; }
+  .fab-wrap .fab-toggle, .fab-wrap .fab-backdrop, .fab-wrap .fab-menu{ pointer-events:auto; }
 
   .wizard-steps{ display:flex; gap:4px; margin-bottom:16px; }
   .wizard-steps .ws{ flex:1; height:4px; border-radius:4px; background:var(--line); }
@@ -375,11 +387,6 @@
       </div>
       <button class="logout-btn" id="logoutBtn">로그아웃</button>
     </div>
-    <div class="admin-btn-row">
-      <button class="logout-btn" id="partnerBtn">🏢 파트너</button>
-      <button class="logout-btn" id="productCatalogBtn">📦 제품마스터</button>
-      <button class="logout-btn" id="masterBtn">🗂 바코드매핑</button>
-    </div>
     <div class="stats-row">
       <div class="stat-chip c-pending">검수대기 <span class="n" id="pendingCount">-</span></div>
       <div class="stat-chip c-confirmed">검수완료 <span class="n" id="confirmedCount">-</span></div>
@@ -393,17 +400,22 @@
       <div class="tab active" data-filter="all">📋 전체</div>
       <div class="tab" data-filter="pending">⏳ 검수대기</div>
       <div class="tab" data-filter="confirmed">✅ 검수완료</div>
+      <div class="tab" data-filter="master">🗂 마스터</div>
     </div>
   </header>
 
   <div class="list" id="list"><div class="loading">불러오는 중...</div></div>
 </div>
 
+<div class="fab-backdrop" id="fabBackdrop"></div>
 <div class="fab-wrap"><div class="fab-inner">
-  <button class="fab-sub" id="exportExcel" title="현재 목록 엑셀 다운로드">⬇</button>
-  <button class="fab-sub3" id="exportCompanyExcel" title="회사양식(입고전산) 엑셀 다운로드">🏭</button>
-  <button class="fab-sub2" id="openExcelImport" title="엑셀로 반품 예정등록">📥</button>
-  <button class="fab" id="openWizard" title="새 반품 등록">+</button>
+  <div class="fab-menu" id="fabMenu">
+    <div class="fab-item"><span class="fab-label">새 반품 등록</span><button class="i-primary" id="openWizard" title="새 반품 등록">📝</button></div>
+    <div class="fab-item"><span class="fab-label">엑셀로 반품 예정등록</span><button class="i-green" id="openExcelImport" title="엑셀로 반품 예정등록">📥</button></div>
+    <div class="fab-item"><span class="fab-label">회사양식(입고전산) 다운로드</span><button class="i-steel" id="exportCompanyExcel" title="회사양식(입고전산) 엑셀 다운로드">🏭</button></div>
+    <div class="fab-item"><span class="fab-label">전체 목록 엑셀 다운로드</span><button class="i-blue" id="exportExcel" title="현재 목록 엑셀 다운로드">⬇</button></div>
+  </div>
+  <button class="fab-toggle" id="fabToggleBtn" title="메뉴 열기">+</button>
 </div></div>
 
 <div class="toast" id="toast"></div>
@@ -616,9 +628,11 @@ async function openEditRecordModal(id){
 
   const hospInput = document.getElementById('er_hospitalName');
   const hospSuggest = document.getElementById('er_partnerSuggest');
+  let erSelectedPartnerCode = '';
   window.fbListPartnerMaster().then(list => { partnerMasterCache = list; });
   hospInput.addEventListener('input', ()=> renderSuggestBox(partnerMasterCache, hospInput.value, hospSuggest, hospInput, (item)=> `${item.code} ${item.name}`));
   hospInput.addEventListener('focus', ()=>{ if(hospInput.value.trim()) renderSuggestBox(partnerMasterCache, hospInput.value, hospSuggest, hospInput, (item)=> `${item.code} ${item.name}`); });
+  hospInput.addEventListener('itemselected', (e)=>{ if(e.detail) erSelectedPartnerCode = e.detail.code || ''; });
   document.addEventListener('click', function hideOnOutside(e){
     if(!hospSuggest.contains(e.target) && e.target !== hospInput){ hospSuggest.style.display = 'none'; }
   });
@@ -630,10 +644,11 @@ async function openEditRecordModal(id){
     const hospitalName = document.getElementById('er_hospitalName').value.trim();
     const memo = document.getElementById('er_memo').value.trim();
     if(!returnNumber){ document.getElementById('er_err').style.display = 'block'; return; }
-    Object.assign(rec, { returnNumber, hospitalName, memo });
+    const partnerCode = resolvePartnerCodeFromInput(hospitalName, erSelectedPartnerCode) || rec.partnerCode || '';
+    Object.assign(rec, { returnNumber, hospitalName, partnerCode, memo });
     render();
     closeOverlay('editRecordOverlay');
-    const ok = await window.fbUpdateRecord(id, { returnNumber, hospitalName, memo });
+    const ok = await window.fbUpdateRecord(id, { returnNumber, hospitalName, partnerCode, memo });
     showToast(ok ? '수정됐어요' : '수정됐지만 저장에 실패했어요');
   });
 }
@@ -2044,6 +2059,21 @@ let excelImportGroups = [];
 // ===================== 새 반품 개별등록 (사진 없음 - 반품번호/반품처/품목만 입력, 엑셀등록의 1건 버전) ===================== //
 
 let irItems = [];
+let irSelectedPartnerCode = '';
+
+// 파트너 검색창에서 클릭으로 선택했으면 그 코드를 우선 쓰고, 직접 "코드 이름" 형식으로 타이핑/붙여넣기 했으면
+// 첫 토큰이 파트너마스터 코드와 일치하는지 확인해서 보정함. 둘 다 아니면 코드 없이(자유 입력) 빈값 반환.
+function resolvePartnerCodeFromInput(value, selectedCode){
+  const v = (value || '').trim();
+  if(!v) return '';
+  if(selectedCode){
+    const match = (partnerMasterCache || []).find(p => p.code === selectedCode);
+    if(match && v === `${match.code} ${match.name}`) return selectedCode;
+  }
+  const firstToken = v.split(/\s+/)[0];
+  const hit = (partnerMasterCache || []).find(p => p.code === firstToken);
+  return hit ? hit.code : '';
+}
 
 async function openIndividualRegisterModal(){
   closeOverlay('irOverlay');
@@ -2088,9 +2118,11 @@ async function openIndividualRegisterModal(){
 
   const hospInput = document.getElementById('ir_hospitalName');
   const hospSuggest = document.getElementById('ir_partnerSuggest');
+  irSelectedPartnerCode = '';
   window.fbListPartnerMaster().then(list => { partnerMasterCache = list; });
   hospInput.addEventListener('input', ()=> renderSuggestBox(partnerMasterCache, hospInput.value, hospSuggest, hospInput, (item)=> `${item.code} ${item.name}`));
   hospInput.addEventListener('focus', ()=>{ if(hospInput.value.trim()) renderSuggestBox(partnerMasterCache, hospInput.value, hospSuggest, hospInput, (item)=> `${item.code} ${item.name}`); });
+  hospInput.addEventListener('itemselected', (e)=>{ if(e.detail) irSelectedPartnerCode = e.detail.code || ''; });
 
   const codeInput = document.getElementById('ir_it_productCode');
   const codeSuggest = document.getElementById('ir_it_productSuggest');
@@ -2149,6 +2181,7 @@ async function submitIndividualRegister(){
 
   const btn = document.getElementById('ir_submitBtn');
   btn.disabled = true; btn.textContent = '등록 중...';
+  const partnerCode = resolvePartnerCodeFromInput(hospitalName, irSelectedPartnerCode);
 
   // 새 제품코드는 제품마스터에 자동 등록 (이름이 있을 때만)
   const existingCatalog = await window.fbListCatalogItems();
@@ -2168,15 +2201,16 @@ async function submitIndividualRegister(){
     }
     existing.items = its;
     if(!existing.hospitalName && hospitalName) existing.hospitalName = hospitalName;
+    if(!existing.partnerCode && partnerCode) existing.partnerCode = partnerCode;
     if(!existing.memo && memo) existing.memo = memo;
     render();
     closeOverlay('irOverlay');
-    await window.fbUpdateRecord(existing.id, { items: its, hospitalName: existing.hospitalName, memo: existing.memo });
+    await window.fbUpdateRecord(existing.id, { items: its, hospitalName: existing.hospitalName, partnerCode: existing.partnerCode, memo: existing.memo });
     await saveMyName(by);
     showToast('기존 반품번호에 품목을 추가했어요');
   } else {
     const rec = {
-      id: genId(), returnNumber, hospitalName, partnerCode: '',
+      id: genId(), returnNumber, hospitalName, partnerCode,
       items: irItems, memo, status: 'pending', source: 'manual',
       registeredBy: by, registeredAt: new Date().toISOString(),
       confirmedBy: null, confirmedAt: null, confirmMemo: null, photoCount: 0
@@ -2727,7 +2761,7 @@ function resetWizardState(){
   wz = {
     step: 1,
     receiptImage: null, receiptRawText: '',
-    returnNumber: '', hospitalName: '',
+    returnNumber: '', hospitalName: '', partnerCode: '',
     zoomImage: null, zoomRawText: '',
     items: [],   // 확정된 품목: {id, productCode, productName, lot, expiryDate, quantity, status, photos:[{data, rawText}]}
     draft: { productCode:'', productName:'', lot:'', expiryDate:'', quantity:'', status:'A', photos:[], gtinLast6:'', masterMatched:false, masterOriginalCode:'' }, // 입력 중인 품목
@@ -2841,6 +2875,7 @@ function renderWizardStep2(modal){
   hospInput.addEventListener('focus', ()=>{
     if(hospInput.value.trim()) renderSuggestBox(partnerMasterCache, hospInput.value, hospSuggest, hospInput, (item)=> `${item.code} ${item.name}`);
   });
+  hospInput.addEventListener('itemselected', (e)=>{ if(e.detail) wz.partnerCode = e.detail.code || ''; });
   document.addEventListener('click', function hideOnOutside(e){
     if(!hospSuggest.contains(e.target) && e.target !== hospInput){ hospSuggest.style.display = 'none'; }
   });
@@ -2891,6 +2926,7 @@ function renderWizardStep2(modal){
   document.getElementById('wz2NextBtn').addEventListener('click', ()=>{
     wz.returnNumber = document.getElementById('wz_returnNumber').value.trim();
     wz.hospitalName = document.getElementById('wz_hospitalName').value.trim();
+    wz.partnerCode = resolvePartnerCodeFromInput(wz.hospitalName, wz.partnerCode);
     if(!wz.returnNumber){ document.getElementById('wz2_err').style.display = 'block'; return; }
     wz.step = 3;
     renderWizardStep();
@@ -3319,7 +3355,7 @@ async function submitWizard(){
   const totalPhotos = 1 + (wz.zoomImage ? 1 : 0) + itemPhotoTotal;
 
   const rec = {
-    id, returnNumber: wz.returnNumber, hospitalName: wz.hospitalName,
+    id, returnNumber: wz.returnNumber, hospitalName: wz.hospitalName, partnerCode: wz.partnerCode || '',
     memo,
     items: wz.items.map(it => ({ id: it.id, productCode: it.productCode, productName: it.productName, lot: it.lot, expiryDate: it.expiryDate, quantity: it.quantity, status: it.status || 'A' })),
     status: 'pending', registeredBy: by, registeredAt: now,
@@ -3463,33 +3499,70 @@ function exportToCompanyFormat(){
 function applyGuestModeUI(){
   const subtitle = document.getElementById('subtitle');
   const wizardBtn = document.getElementById('openWizard');
-  const masterBtn = document.getElementById('masterBtn');
-  const partnerBtn = document.getElementById('partnerBtn');
-  const productCatalogBtn = document.getElementById('productCatalogBtn');
   const excelImportBtn = document.getElementById('openExcelImport');
+  const wizardItem = wizardBtn ? wizardBtn.closest('.fab-item') : null;
+  const excelImportItem = excelImportBtn ? excelImportBtn.closest('.fab-item') : null;
+  const masterTab = document.querySelector('.tab[data-filter="master"]');
   if(isGuestMode){
-    if(wizardBtn) wizardBtn.style.display = 'none';
-    if(masterBtn) masterBtn.style.display = 'none';
-    if(partnerBtn) partnerBtn.style.display = 'none';
-    if(productCatalogBtn) productCatalogBtn.style.display = 'none';
-    if(excelImportBtn) excelImportBtn.style.display = 'none';
+    if(wizardItem) wizardItem.style.display = 'none';
+    if(excelImportItem) excelImportItem.style.display = 'none';
+    if(masterTab) masterTab.style.display = 'none';
     if(subtitle) subtitle.textContent = '반품인수증 · 실물 대조 검수 관리 (게스트)';
   } else {
-    if(wizardBtn) wizardBtn.style.display = '';
-    if(masterBtn) masterBtn.style.display = '';
-    if(partnerBtn) partnerBtn.style.display = '';
-    if(productCatalogBtn) productCatalogBtn.style.display = '';
-    if(excelImportBtn) excelImportBtn.style.display = '';
+    if(wizardItem) wizardItem.style.display = '';
+    if(excelImportItem) excelImportItem.style.display = '';
+    if(masterTab) masterTab.style.display = '';
     if(subtitle) subtitle.textContent = '반품인수증 · 실물 대조 검수 관리';
   }
 }
 
+// 파트너/제품마스터/바코드매핑 관리 메뉴 - "마스터" 탭을 누르면 뜨는 선택 모달
+function openMasterMenuModal(){
+  closeOverlay('masterMenuOverlay');
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'masterMenuOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>마스터 관리</h2>
+    <div class="hint" style="margin-bottom:14px;">반품처·제품·바코드 마스터 데이터를 관리해요.</div>
+    <div class="master-menu-list">
+      <button class="master-menu-item" id="mm_partner"><span class="mm-icon">🏢</span><span class="mm-text"><b>파트너</b><small>반품처 코드 · 이름 관리</small></span></button>
+      <button class="master-menu-item" id="mm_catalog"><span class="mm-icon">📦</span><span class="mm-text"><b>제품마스터</b><small>제품코드 · 제품명 관리</small></span></button>
+      <button class="master-menu-item" id="mm_barcode"><span class="mm-icon">🗂</span><span class="mm-text"><b>바코드매핑</b><small>GTIN 끝 6자리 · 제품코드 매핑</small></span></button>
+    </div>
+    <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('masterMenuOverlay')">닫기</button></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('masterMenuOverlay'); });
+  document.getElementById('mm_partner').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openPartnerModal(); });
+  document.getElementById('mm_catalog').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openProductCatalogModal(); });
+  document.getElementById('mm_barcode').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openMasterModal(); });
+}
+
+// FAB 토글식 확장메뉴: 평소엔 + 버튼만 보이고, 누르면 라벨과 함께 하위 메뉴가 펼쳐짐
+(function initFabToggle(){
+  const toggleBtn = document.getElementById('fabToggleBtn');
+  const menu = document.getElementById('fabMenu');
+  const backdrop = document.getElementById('fabBackdrop');
+  if(!toggleBtn || !menu || !backdrop) return;
+  function closeFabMenu(){
+    menu.classList.remove('open');
+    toggleBtn.classList.remove('open');
+    backdrop.classList.remove('open');
+  }
+  function toggleFabMenu(){
+    const willOpen = !menu.classList.contains('open');
+    menu.classList.toggle('open', willOpen);
+    toggleBtn.classList.toggle('open', willOpen);
+    backdrop.classList.toggle('open', willOpen);
+  }
+  toggleBtn.addEventListener('click', toggleFabMenu);
+  backdrop.addEventListener('click', closeFabMenu);
+  menu.querySelectorAll('.fab-item button').forEach(btn => btn.addEventListener('click', closeFabMenu));
+})();
+
 document.getElementById('openWizard').addEventListener('click', openIndividualRegisterModal);
 document.getElementById('openStartInspect').addEventListener('click', openStartInspectModal);
 document.getElementById('openExcelImport').addEventListener('click', openExcelImportModal);
-document.getElementById('masterBtn').addEventListener('click', openMasterModal);
-document.getElementById('partnerBtn').addEventListener('click', openPartnerModal);
-document.getElementById('productCatalogBtn').addEventListener('click', openProductCatalogModal);
 document.getElementById('exportExcel').addEventListener('click', exportToExcel);
 document.getElementById('exportCompanyExcel').addEventListener('click', exportToCompanyFormat);
 document.getElementById('logoutBtn').addEventListener('click', ()=>{
@@ -3498,6 +3571,7 @@ document.getElementById('logoutBtn').addEventListener('click', ()=>{
 document.getElementById('searchInput').addEventListener('input', (e)=>{ searchTerm = e.target.value; render(); });
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', ()=>{
+    if(tab.dataset.filter === 'master'){ openMasterMenuModal(); return; }
     document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
     tab.classList.add('active');
     currentFilter = tab.dataset.filter;
