@@ -2075,6 +2075,22 @@ function resolvePartnerCodeFromInput(value, selectedCode){
   return hit ? hit.code : '';
 }
 
+// 기록에 partnerCode가 이미 있으면 그대로 쓰고, 없으면(코드 필드가 비어있던 예전 기록) hospitalName에 남아있는
+// "코드 이름" 형태 텍스트에서 코드를 분리해내고 이름도 마스터의 깨끗한 이름으로 바꿔줌 (엑셀에 코드+이름 중복 방지)
+function resolvePartnerForRecord(r, partnerList){
+  if(r.partnerCode){
+    const match = (partnerList || []).find(p => p.code === r.partnerCode);
+    return { code: r.partnerCode, name: match ? match.name : (r.hospitalName || '') };
+  }
+  const hosp = (r.hospitalName || '').trim();
+  if(hosp){
+    const firstToken = hosp.split(/\s+/)[0];
+    const hit = (partnerList || []).find(p => p.code === firstToken);
+    if(hit) return { code: hit.code, name: hit.name };
+  }
+  return { code: '', name: r.hospitalName || '' };
+}
+
 async function openIndividualRegisterModal(){
   closeOverlay('irOverlay');
   irItems = [];
@@ -3437,13 +3453,19 @@ function exportToExcel(){
 // 반품번호(주문번호) → 제품코드 → LOT 순으로 오름차순 정렬해서, 같은 제품이라도 LOT이 다르면 줄을 나눠서 내보냄.
 // 반품 사유 / QREM발송예정 / 비고는 항상 빈칸으로 남겨서 엑셀에서 직접 채우도록 함.
 
-function exportToCompanyFormat(){
+async function exportToCompanyFormat(){
   const list = getFiltered();
   if(list.length === 0){ showToast('내보낼 항목이 없어요'); return; }
+
+  // partnerCode가 비어있는 기존(수정 전) 기록도 배송처명에 남아있는 코드 접두어로 보정해서 내보냄
+  const partnerList = await window.fbListPartnerMaster();
+  partnerMasterCache = partnerList;
+
   const rows = [];
 
   list.forEach(r => {
     const receivedDate = r.confirmedAt ? fmtDate(r.confirmedAt).split(' ')[0] : '';
+    const { code: partnerCode, name: partnerName } = resolvePartnerForRecord(r, partnerList);
     itemsOf(r).forEach(it => {
       const lots = isExcelItem(it)
         ? (Array.isArray(it.lots) ? it.lots : [])
@@ -3453,8 +3475,8 @@ function exportToCompanyFormat(){
         rows.push({
           '입고일자': receivedDate,
           '주문번호': r.returnNumber || '',
-          '배송처코드': r.partnerCode || '',
-          '배송처명': r.hospitalName || '',
+          '배송처코드': partnerCode,
+          '배송처명': partnerName,
           '제품코드': it.productCode || '',
           '제품명': it.productName || '',
           'LOT': l.lot || '',
@@ -3528,6 +3550,7 @@ function openMasterMenuModal(){
       <button class="master-menu-item" id="mm_partner"><span class="mm-icon">🏢</span><span class="mm-text"><b>파트너</b><small>반품처 코드 · 이름 관리</small></span></button>
       <button class="master-menu-item" id="mm_catalog"><span class="mm-icon">📦</span><span class="mm-text"><b>제품마스터</b><small>제품코드 · 제품명 관리</small></span></button>
       <button class="master-menu-item" id="mm_barcode"><span class="mm-icon">🗂</span><span class="mm-text"><b>바코드매핑</b><small>GTIN 끝 6자리 · 제품코드 매핑</small></span></button>
+      <button class="master-menu-item" id="mm_repair"><span class="mm-icon">🧹</span><span class="mm-text"><b>배송처코드 일괄 정리</b><small>코드가 비어있는 예전 기록을 파트너마스터로 자동 보정</small></span></button>
     </div>
     <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('masterMenuOverlay')">닫기</button></div>
   </div>`;
@@ -3536,6 +3559,38 @@ function openMasterMenuModal(){
   document.getElementById('mm_partner').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openPartnerModal(); });
   document.getElementById('mm_catalog').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openProductCatalogModal(); });
   document.getElementById('mm_barcode').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openMasterModal(); });
+  document.getElementById('mm_repair').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); runPartnerCodeRepair(); });
+}
+
+// 코드가 비어있는(=예전 방식으로 등록된) 기록들을 찾아서 hospitalName에 남은 코드 접두어로 partnerCode를 채워주고
+// hospitalName도 마스터의 깨끗한 이름으로 정리해줌. 실제 Firestore에 저장까지 반영하는 일회성 정리 도구.
+async function runPartnerCodeRepair(){
+  const partnerList = await window.fbListPartnerMaster();
+  partnerMasterCache = partnerList;
+  const targets = records.filter(r => !r.partnerCode && (r.hospitalName || '').trim());
+  const fixable = targets.map(r => ({ r, resolved: resolvePartnerForRecord(r, partnerList) })).filter(x => x.resolved.code);
+
+  if(fixable.length === 0){
+    showAppConfirm(`코드가 비어있는 기록 ${targets.length}건 중 파트너마스터에서 매칭되는 코드가 없어요. 정리할 항목이 없습니다.`, '확인', ()=>{});
+    return;
+  }
+
+  showAppConfirm(
+    `배송처코드가 비어있는 기록 중 ${fixable.length}건을 파트너마스터로 자동 보정할 수 있어요.\n(배송처명도 "코드 이름" 중복 텍스트에서 깨끗한 이름으로 정리돼요)\n지금 정리할까요?`,
+    '정리 실행',
+    async ()=>{
+      showToast(`${fixable.length}건 정리 중...`);
+      let successCount = 0;
+      for(const { r, resolved } of fixable){
+        r.partnerCode = resolved.code;
+        r.hospitalName = resolved.name;
+        const ok = await window.fbUpdateRecord(r.id, { partnerCode: resolved.code, hospitalName: resolved.name });
+        if(ok) successCount++;
+      }
+      render();
+      showToast(`${successCount}/${fixable.length}건 정리 완료`);
+    }
+  );
 }
 
 // FAB 토글식 확장메뉴: 평소엔 + 버튼만 보이고, 누르면 라벨과 함께 하위 메뉴가 펼쳐짐
