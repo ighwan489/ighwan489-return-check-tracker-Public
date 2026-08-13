@@ -115,6 +115,10 @@
         try{ await deleteDoc(doc(photosCol, photoId)); return true; }
         catch(e){ console.error('Firestore photo delete error:', e); return false; }
       };
+      window.fbUpdatePhotoData = async function(photoId, newData){
+        try{ await updateDoc(doc(photosCol, photoId), { data: newData, recompressedAt: new Date().toISOString() }); return true; }
+        catch(e){ console.error('Firestore photo update error:', e); return false; }
+      };
 
       // 제품코드 마스터: 바코드(GTIN) 끝 6자리 → 제품코드/제품명 매핑. 한번 등록해두면 다음부터 실물사진 OCR에서 자동 인식됨
       window.fbGetProductMaster = async function(key){
@@ -275,6 +279,7 @@
   .stat-chip .n{ font-family:'JetBrains Mono',monospace; font-size:13px; }
   .stat-chip.c-pending .n{ color:#FFD9B3; }
   .stat-chip.c-expected .n{ color:#B9C7D4; }
+  .stat-chip.c-inprogress .n{ color:#9DC7FF; }
   .stat-chip.c-confirmed .n{ color:#A6E4C2; }
 
   .search-row{ margin-top:14px; position:relative; }
@@ -300,9 +305,10 @@
   .selection-bar .btn-sel-clear{ background:none; color:var(--ink-muted); border:1px solid var(--line); }
 
   .tabs{ display:flex; gap:5px; margin-top:12px; }
-  .tab{ flex:1; text-align:center; padding:8px 4px; border-radius:8px; font-size:11.5px; font-weight:600; background:rgba(255,255,255,.08); color:#C9D5DF; cursor:pointer; border:1px solid transparent; }
+  .tab{ flex:1; text-align:center; padding:8px 2px; border-radius:8px; font-size:10.8px; font-weight:600; background:rgba(255,255,255,.08); color:#C9D5DF; cursor:pointer; border:1px solid transparent; }
   .tab.active{ background:#fff; color:var(--steel-dark); }
   .tab.active[data-filter="pending"]{ background:var(--amber); color:#fff; }
+  .tab.active[data-filter="inprogress"]{ background:var(--blue); color:#fff; }
   .tab.active[data-filter="expected"]{ background:var(--steel); color:#fff; }
   .tab.active[data-filter="confirmed"]{ background:var(--green); color:#fff; }
   .tab.active[data-filter="master"]{ background:var(--steel-dark); color:#fff; }
@@ -453,6 +459,7 @@
     </div>
     <div class="stats-row">
       <div class="stat-chip c-pending">검수대기 <span class="n" id="pendingCount">-</span></div>
+      <div class="stat-chip c-inprogress">검수중 <span class="n" id="inprogressCount">-</span></div>
       <div class="stat-chip c-confirmed">검수완료 <span class="n" id="confirmedCount">-</span></div>
     </div>
     <div class="search-row">
@@ -465,8 +472,9 @@
     <button class="print-btn" id="openStartInspect" style="width:100%; margin-top:10px; padding:11px; font-size:13px;">📷 반품번호로 검수 시작 (촬영/입력)</button>
     <div class="tabs" id="tabs">
       <div class="tab active" data-filter="all">📋 전체</div>
-      <div class="tab" data-filter="pending">⏳ 검수대기</div>
-      <div class="tab" data-filter="confirmed">✅ 검수완료</div>
+      <div class="tab" data-filter="pending">⏳ 대기</div>
+      <div class="tab" data-filter="inprogress">🔄 진행중</div>
+      <div class="tab" data-filter="confirmed">✅ 완료</div>
       <div class="tab" data-filter="master">🗂 마스터</div>
     </div>
   </header>
@@ -552,8 +560,8 @@ function initRealtimeSync(){
   );
 }
 
-const STATUS_LABEL = { expected:'예정', pending:'검수대기', confirmed:'검수완료' };
-const STATUS_ICON = { expected:'📋', pending:'⏳', confirmed:'✅' };
+const STATUS_LABEL = { expected:'예정', pending:'검수대기', inprogress:'검수중(임시저장)', confirmed:'검수완료' };
+const STATUS_ICON = { expected:'📋', pending:'⏳', inprogress:'🔄', confirmed:'✅' };
 
 // 품목(실물 제품) 상태값 - 블락배치와 동일한 코드 체계 중 우선 5개만 사용
 const ITEM_STATUS_LABEL = { A:'정상', B:'판정대기', D:'부적합', E:'유효기간경과', F:'유효기간임박' };
@@ -614,6 +622,7 @@ function isExcelItem(it){ return it.expectedQuantity !== undefined && it.expecte
 
 function render(){
   document.getElementById('pendingCount').textContent = records.filter(r => r.status === 'pending').length;
+  document.getElementById('inprogressCount').textContent = records.filter(r => r.status === 'inprogress').length;
   document.getElementById('confirmedCount').textContent = records.filter(r => r.status === 'confirmed').length;
   updateMultiChip();
   updateDateFilterHint();
@@ -674,9 +683,9 @@ function render(){
         <div class="photo-badge">🖼 사진 ${(r.photoCount ?? '?')}장</div>
         <div class="card-actions">
           <button class="btn-sm btn-view btn-full-row" onclick="openDetail('${r.id}')">품목·사진 상세 보기</button>
-          ${!isGuestMode && (r.status === 'expected' || r.status === 'pending') ? `<button class="btn-sm" style="background:var(--blue-bg); color:var(--blue); border:1px solid #C7D8FC;" onclick="openInspectModal('${r.id}')">🔍 실물검수</button>` : ''}
+          ${!isGuestMode && (r.status === 'expected' || r.status === 'pending' || r.status === 'inprogress') ? `<button class="btn-sm" style="background:var(--blue-bg); color:var(--blue); border:1px solid #C7D8FC;" onclick="openInspectModal('${r.id}')">🔍 ${r.status === 'inprogress' ? '검수 이어하기' : '실물검수'}</button>` : ''}
           ${!isGuestMode ? `<button class="btn-sm btn-edit" onclick="openEditRecordModal('${r.id}')">✏️ 정보 수정</button>` : ''}
-          ${(!isGuestMode && r.status === 'pending') ? `<button class="btn-sm btn-confirm" onclick="openConfirmModal('${r.id}')">검수완료 처리</button>` : ''}
+          ${(!isGuestMode && (r.status === 'pending' || r.status === 'inprogress')) ? `<button class="btn-sm btn-confirm" onclick="openConfirmModal('${r.id}')">검수완료 처리</button>` : ''}
           ${!isGuestMode ? `<button class="btn-sm btn-del" onclick="openDeleteConfirm('${r.id}')">삭제</button>` : ''}
         </div>
       </div>
@@ -2987,12 +2996,25 @@ async function openInspectModal(recordId){
     <div id="insp_itemsList"></div>
     <div class="modal-actions">
       <button class="btn-cancel" style="flex:1;" onclick="closeOverlay('inspectOverlay')">닫기</button>
+      ${!isGuestMode ? `<button class="btn-submit" style="background:var(--blue); flex:1;" id="insp_saveDraftBtn">💾 임시저장</button>` : ''}
       ${!isGuestMode ? `<button class="btn-submit green" id="insp_completeBtn">검수완료 처리</button>` : ''}
     </div>
   </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('inspectOverlay'); });
   renderInspectItemsList(recordId);
+
+  const saveDraftBtn = document.getElementById('insp_saveDraftBtn');
+  if(saveDraftBtn){
+    saveDraftBtn.addEventListener('click', async ()=>{
+      const its = itemsOf(rec);
+      const ok = await window.fbUpdateRecord(recordId, { items: its, status: 'inprogress' });
+      if(ok) rec.status = 'inprogress';
+      closeOverlay('inspectOverlay');
+      render();
+      showToast(ok ? '임시저장 완료 - "진행중" 탭에서 이어서 검수할 수 있어요' : '임시저장에 실패했어요');
+    });
+  }
 
   const completeBtn = document.getElementById('insp_completeBtn');
   if(completeBtn){
@@ -3039,7 +3061,7 @@ function renderInspectItemsList(recordId){
       return `<div class="item-card">
         <div class="item-card-top">
           <div>
-            <div class="it-name">${escapeHtml(it.productName || it.productCode)} ${complete ? '<span style="color:var(--green); font-weight:700;">✅ 완료</span>' : ''}</div>
+            <div class="it-name">${escapeHtml(it.productName || it.productCode)} ${complete ? '<span style="color:var(--green); font-weight:700;">✅ 완료</span>' : ''}${it.isUnexpected ? ' <span style="color:var(--amber); font-weight:700; font-size:10.5px;">➕예정외</span>' : ''}</div>
             <div class="it-lot">${escapeHtml(it.productCode)}</div>
             <div class="it-meta">예정 ${expected}개 · 확인 ${verified}개${it.reason ? ' · ' + escapeHtml(it.reason) : ''}</div>
           </div>
@@ -3072,6 +3094,56 @@ function renderInspectItemsList(recordId){
       </div>
     </div>`;
   }).join('');
+  if(!isGuestMode){
+    wrap.innerHTML += `<button class="btn-cancel" style="width:100%; margin-top:10px;" onclick="openAddUnexpectedItemModal('${recordId}')">➕ 예정에 없는 품목 추가</button>`;
+  }
+}
+
+// 반품처가 원래 등록 안 된 제품을 보내온 경우 - 실물검수 중 바로 새 품목으로 추가할 수 있게 함
+function openAddUnexpectedItemModal(recordId){
+  closeOverlay('addUnexpectedItemOverlay');
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'addUnexpectedItemOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>예정에 없는 품목 추가</h2>
+    <div class="hint" style="margin-bottom:10px;">반품처가 원래 목록에 없던 제품을 같이 보낸 경우 여기서 바로 추가해요. 추가 후 LOT을 검수하면 돼요.</div>
+    <div class="field" style="position:relative;">
+      <label>제품코드 *</label>
+      <input id="ui_code" type="text" autocomplete="off" placeholder="예: F00005444">
+      <div id="ui_codeSuggest" class="suggest-box" style="display:none;"></div>
+    </div>
+    <div class="field"><label>제품명</label><input id="ui_name" type="text" autocomplete="off" placeholder="예: AV-Set ONLINEplus 5008-R"></div>
+    <div class="err" id="ui_err">제품코드를 입력해주세요</div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeOverlay('addUnexpectedItemOverlay')">취소</button>
+      <button class="btn-submit" id="ui_addBtn">추가</button>
+    </div></div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('addUnexpectedItemOverlay'); });
+
+  const codeInput = document.getElementById('ui_code');
+  const nameInput = document.getElementById('ui_name');
+  const suggestBox = document.getElementById('ui_codeSuggest');
+  window.fbListCatalogItems().then(list => { productCatalogCache = list; });
+  codeInput.addEventListener('input', ()=> renderSuggestBox(productCatalogCache, codeInput.value, suggestBox, codeInput, (item)=> item.code));
+  codeInput.addEventListener('itemselected', (e)=>{ if(e.detail && !nameInput.value.trim()) nameInput.value = e.detail.name || ''; });
+
+  document.getElementById('ui_addBtn').addEventListener('click', async ()=>{
+    const code = codeInput.value.trim();
+    const name = nameInput.value.trim();
+    if(!code){ document.getElementById('ui_err').style.display = 'block'; return; }
+    const rec = records.find(r => r.id === recordId);
+    if(!rec) return;
+    const its = itemsOf(rec);
+    const newItem = { id: genId(), productCode: code, productName: name, expectedQuantity: 0, lots: [], isUnexpected: true };
+    its.push(newItem);
+    rec.items = its;
+    render();
+    closeOverlay('addUnexpectedItemOverlay');
+    const ok = await window.fbUpdateRecord(recordId, { items: its });
+    showToast(ok ? '예정 외 품목이 추가됐어요' : '추가됐지만 저장에 실패했어요');
+    openInspectModal(recordId);
+  });
 }
 
 async function deleteLotFromItem(recordId, itemId, lotId){
@@ -4188,6 +4260,7 @@ function openMasterMenuModal(){
       <button class="master-menu-item" id="mm_blockbatch"><span class="mm-icon">🚫</span><span class="mm-text"><b>블락배치</b><small>블락배치 제품코드·LOT 등록 - 검수 시 자동 인식</small></span></button>
       <button class="master-menu-item" id="mm_repair"><span class="mm-icon">🧹</span><span class="mm-text"><b>배송처코드 일괄 정리</b><small>코드가 비어있는 예전 기록을 파트너마스터로 자동 보정</small></span></button>
       <button class="master-menu-item" id="mm_logs"><span class="mm-icon">🕘</span><span class="mm-text"><b>정리 이력 보기</b><small>누가 언제 무슨 일괄정리를 실행했는지 확인</small></span></button>
+      <button class="master-menu-item" id="mm_photocompress"><span class="mm-icon">🗜</span><span class="mm-text"><b>오래된 사진 압축 정리</b><small>90일 지난 검수완료 건의 사진을 더 작게 압축해서 용량 절약</small></span></button>
     </div>
     <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('masterMenuOverlay')">닫기</button></div>
   </div>`;
@@ -4199,9 +4272,55 @@ function openMasterMenuModal(){
   document.getElementById('mm_blockbatch').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openBlockBatchModal(); });
   document.getElementById('mm_repair').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); runPartnerCodeRepair(); });
   document.getElementById('mm_logs').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openMaintenanceLogModal(); });
+  document.getElementById('mm_photocompress').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); runOldPhotoCompression(); });
 }
 
-// ===================== 블락배치 마스터 ===================== //
+async function runOldPhotoCompression(){
+  const CUTOFF_DAYS = 90;
+  const cutoff = Date.now() - CUTOFF_DAYS * 86400000;
+  const targets = records.filter(r => r.status === 'confirmed' && r.confirmedAt && new Date(r.confirmedAt).getTime() < cutoff);
+
+  if(targets.length === 0){
+    showAppConfirm(`검수완료된 지 ${CUTOFF_DAYS}일 넘은 기록이 없어요. 정리할 게 없습니다.`, '확인', ()=>{});
+    return;
+  }
+
+  showAppConfirm(
+    `검수완료된 지 ${CUTOFF_DAYS}일 넘은 반품 건 ${targets.length}건의 첨부사진을 더 작게 압축할게요.\n(이미 충분히 작은 사진은 건드리지 않아요)\n시간이 좀 걸릴 수 있어요. 진행할까요?`,
+    '압축 실행',
+    async ()=>{
+      showToast(`${targets.length}건 처리 중...`);
+      let photoCount = 0, compressedCount = 0, beforeTotal = 0, afterTotal = 0;
+      for(const r of targets){
+        const photos = await window.fbGetPhotos(r.id);
+        for(const p of photos){
+          if(!p.data || typeof p.data !== 'string') continue;
+          photoCount++;
+          beforeTotal += p.data.length;
+          try{
+            const recompressed = await resizeImageToDataUrl(p.data, 700, 'jpeg', 0.4);
+            if(recompressed.length < p.data.length){
+              const ok = await window.fbUpdatePhotoData(p.id, recompressed);
+              if(ok){ compressedCount++; afterTotal += recompressed.length; }
+              else afterTotal += p.data.length;
+            } else {
+              afterTotal += p.data.length;
+            }
+          }catch(e){ console.warn('사진 재압축 실패:', e); afterTotal += p.data.length; }
+        }
+      }
+      const savedMB = ((beforeTotal - afterTotal) / 1024 / 1024 * 0.73).toFixed(1); // base64 -> 실제 바이트 환산(약 0.73배)
+      await window.fbAddMaintenanceLog({
+        type: '오래된 사진 압축 정리',
+        by: myName || '',
+        totalCount: photoCount,
+        successCount: compressedCount,
+        details: [`대상 반품 ${targets.length}건 · 사진 ${photoCount}장 중 ${compressedCount}장 압축 · 약 ${savedMB}MB 절약`]
+      });
+      showAppConfirm(`완료! 반품 ${targets.length}건 · 사진 ${photoCount}장 중 ${compressedCount}장을 압축해서 약 ${savedMB}MB 절약했어요.`, '확인', ()=>{});
+    }
+  );
+}
 let blockBatchCache = [];
 
 async function openBlockBatchModal(){
