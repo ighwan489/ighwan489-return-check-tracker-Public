@@ -545,6 +545,7 @@ function render(){
     const its = itemsOf(r);
     const shown = its.slice(0, 3);
     const moreCount = its.length - shown.length;
+    const mismatchCount = its.reduce((sum, it) => sum + (Array.isArray(it.lots) ? it.lots.filter(l => l.codeMismatch).length : 0), 0);
     return `
     <div class="card ${r.status}">
       <div class="card-inner">
@@ -555,6 +556,7 @@ function render(){
           </div>
           <span class="badge ${r.status}">${STATUS_ICON[r.status]} ${STATUS_LABEL[r.status]}</span>
         </div>
+        ${mismatchCount > 0 ? `<div style="font-size:11px; font-weight:700; color:var(--danger); background:#FBEAE8; padding:5px 9px; border-radius:8px; margin-top:6px; display:inline-block;">⚠️ 제품코드 불일치 LOT ${mismatchCount}건</div>` : ''}
         <div class="meta-row">
           <span>등록 <b>${escapeHtml(r.registeredBy)}</b></span>
           <span>${fmtDate(r.registeredAt)}</span>
@@ -728,9 +730,11 @@ function openConfirmModal(id){
   closeOverlay('confirmOverlay');
   const rec = records.find(r => r.id === id);
   if(!rec) return;
+  const mismatchCount = itemsOf(rec).reduce((sum, it) => sum + (Array.isArray(it.lots) ? it.lots.filter(l => l.codeMismatch).length : 0), 0);
   const overlay = document.createElement('div');
   overlay.className = 'overlay'; overlay.id = 'confirmOverlay';
   overlay.innerHTML = `<div class="modal"><h2>검수완료 처리</h2>
+    ${mismatchCount > 0 ? `<div style="font-size:12px; font-weight:700; color:var(--danger); background:#FBEAE8; padding:8px 10px; border-radius:8px; margin-bottom:12px;">⚠️ 제품코드가 다르게 스캔된 LOT ${mismatchCount}건이 포함된 채로 확정돼요</div>` : ''}
     <div class="field"><label>반품번호</label><input type="text" value="${escapeHtml(rec.returnNumber||'')}" disabled></div>
     <div class="field"><label>검수자 *</label><input id="cf_by" type="text" placeholder="이름" value="${escapeHtml(myName)}"></div>
     <div class="field"><label>검수 메모</label><textarea id="cf_memo" placeholder="이상 유무, 특이사항 (선택)"></textarea></div>
@@ -841,13 +845,14 @@ async function openDetail(id){
         lots.forEach(l => {
           const lPhotos = photos.filter(p => p.lotId === l.id);
           const st = l.status || 'A';
-          html += `<div class="meta-row" style="margin-bottom:6px;">
+          html += `<div class="meta-row" style="margin-bottom:${l.codeMismatch ? '2' : '6'}px;">
             <span>LOT <b>${escapeHtml(l.lot)}</b></span>
             <span>유효기간 <b>${escapeHtml(l.expiryDate||'-')}</b></span>
             <span>수량 <b>${escapeHtml(String(l.quantity))}</b></span>
             <span style="font-size:9.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st]||'var(--ink-muted)'}; padding:2px 7px; border-radius:10px;">${st}</span>
             ${!isGuestMode ? `<button class="btn-sm btn-del" onclick="deleteLotFromItem('${id}','${it.id}','${l.id}')">삭제</button>` : ''}
-          </div>`;
+          </div>
+          ${l.codeMismatch ? `<div style="font-size:11px; font-weight:700; color:var(--danger); margin-bottom:6px;">⚠️ ${escapeHtml(l.codeMismatch.source)}로 스캔된 코드(${escapeHtml(l.codeMismatch.scannedCode)})가 예정 제품코드(${escapeHtml(l.codeMismatch.expectedCode)})와 달라요</div>` : ''}`;
           if(lPhotos.length > 0){
             html += `<div class="cert-gallery">` + lPhotos.map(p => `
               <div class="cert-gallery-item">
@@ -2621,11 +2626,25 @@ async function openInspectModal(recordId){
     completeBtn.addEventListener('click', ()=>{
       const its = itemsOf(rec);
       const incomplete = its.filter(it => isExcelItem(it) && itemVerifiedQty(it) < (parseFloat(it.expectedQuantity)||0));
-      const proceed = ()=>{ closeOverlay('inspectOverlay'); openConfirmModal(recordId); };
-      if(incomplete.length > 0){
-        showAppConfirm(`아직 예정수량만큼 확인 안 된 품목이 ${incomplete.length}건 있어요.\n그래도 검수완료 처리할까요?`, '그래도 완료', proceed);
+      const mismatchLots = [];
+      its.forEach(it => {
+        if(isExcelItem(it) && Array.isArray(it.lots)){
+          it.lots.forEach(l => { if(l.codeMismatch) mismatchLots.push({ productName: it.productName || it.productCode, lot: l.lot, mismatch: l.codeMismatch }); });
+        }
+      });
+      const proceedToConfirm = ()=>{ closeOverlay('inspectOverlay'); openConfirmModal(recordId); };
+      const proceedAfterIncompleteCheck = ()=>{
+        if(incomplete.length > 0){
+          showAppConfirm(`아직 예정수량만큼 확인 안 된 품목이 ${incomplete.length}건 있어요.\n그래도 검수완료 처리할까요?`, '그래도 완료', proceedToConfirm);
+        } else {
+          proceedToConfirm();
+        }
+      };
+      if(mismatchLots.length > 0){
+        const msg = mismatchLots.map(m => `- ${m.productName} · LOT ${m.lot}: ${m.mismatch.source}로 스캔된 코드(${m.mismatch.scannedCode})가 예정 코드(${m.mismatch.expectedCode})와 달라요`).join('\n');
+        showAppConfirm(`⚠️ 제품코드가 다르게 스캔된 LOT이 ${mismatchLots.length}건 있어요:\n${msg}\n\n그래도 이대로 검수완료 처리할까요?`, '그래도 완료', proceedAfterIncompleteCheck);
       } else {
-        proceed();
+        proceedAfterIncompleteCheck();
       }
     });
   }
@@ -2656,9 +2675,12 @@ function renderInspectItemsList(recordId){
         ${lots.length > 0 ? `<div style="margin-top:8px; display:flex; flex-direction:column; gap:6px;">
           ${lots.map(l => {
             const st = l.status || 'A';
-            return `<div style="display:flex; justify-content:space-between; align-items:center; background:#fff; border:1px solid var(--line); border-radius:8px; padding:7px 10px; font-size:12px;">
-              <span><b>${escapeHtml(l.lot)}</b> · ${escapeHtml(l.expiryDate||'-')} · ${escapeHtml(String(l.quantity))}개 <span style="font-size:9.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st]||'var(--ink-muted)'}; padding:1px 6px; border-radius:8px;">${st}</span></span>
-              ${!isGuestMode ? `<button class="btn-sm btn-del" style="padding:3px 8px;" onclick="deleteLotFromItem('${recordId}','${it.id}','${l.id}')">삭제</button>` : ''}
+            return `<div style="display:flex; flex-direction:column; gap:4px; background:#fff; border:1px solid ${l.codeMismatch ? 'var(--danger)' : 'var(--line)'}; border-radius:8px; padding:7px 10px; font-size:12px;">
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span><b>${escapeHtml(l.lot)}</b> · ${escapeHtml(l.expiryDate||'-')} · ${escapeHtml(String(l.quantity))}개 <span style="font-size:9.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st]||'var(--ink-muted)'}; padding:1px 6px; border-radius:8px;">${st}</span></span>
+                ${!isGuestMode ? `<button class="btn-sm btn-del" style="padding:3px 8px;" onclick="deleteLotFromItem('${recordId}','${it.id}','${l.id}')">삭제</button>` : ''}
+              </div>
+              ${l.codeMismatch ? `<div style="font-size:11px; font-weight:700; color:var(--danger);">⚠️ ${escapeHtml(l.codeMismatch.source)}로 스캔된 코드(${escapeHtml(l.codeMismatch.scannedCode)})가 이 품목의 제품코드(${escapeHtml(l.codeMismatch.expectedCode)})와 달라요 - 실물을 다시 확인해주세요</div>` : ''}
             </div>`;
           }).join('')}
         </div>` : `<div class="hint" style="margin-top:6px;">아직 확인된 LOT이 없어요</div>`}
@@ -2702,6 +2724,7 @@ async function deleteLotFromItem(recordId, itemId, lotId){
 
 let lotDraftGen = 0;
 let lotDraftPhotos = [];
+let lotDraftMismatch = null; // 이 LOT을 추가하는 동안 감지된 제품코드 불일치 정보 (있으면 LOT에 같이 저장돼서 검수완료 시에도 계속 보임)
 
 async function openAddLotModal(recordId, itemId){
   closeOverlay('addLotOverlay');
@@ -2711,6 +2734,7 @@ async function openAddLotModal(recordId, itemId){
   const it = its.find(x => x.id === itemId);
   if(!it) return;
   lotDraftPhotos = [];
+  lotDraftMismatch = null;
   lotDraftGen++;
   const myGen = lotDraftGen;
 
@@ -2788,6 +2812,7 @@ async function openAddLotModal(recordId, itemId){
               barcodeFound.push('바코드 제품코드 일치 확인');
             } else {
               barcodeFound.push(`⚠️ 바코드 매핑 제품코드(${masterHit.productCode})가 예정 제품코드와 달라요`);
+              lotDraftMismatch = { scannedCode: masterHit.productCode, expectedCode: it.productCode, source: '바코드' };
             }
           }
         }
@@ -2804,6 +2829,7 @@ async function openAddLotModal(recordId, itemId){
       if(codeGuess){
         if(normalizeCodeForMatch(codeGuess) !== normalizeCodeForMatch(it.productCode)){
           mismatchWarn = `⚠️ 사진에서 읽은 코드(${escapeHtml(codeGuess)})가 예정 제품코드(${escapeHtml(it.productCode)})와 달라요 - 실물을 다시 확인해주세요!`;
+          lotDraftMismatch = { scannedCode: codeGuess, expectedCode: it.productCode, source: '텍스트' };
         } else {
           found.push('제품코드 일치 확인');
         }
@@ -2857,6 +2883,7 @@ async function openAddLotModal(recordId, itemId){
     const expiryDate = document.getElementById('al_expiryDate').value.trim();
     const status = document.getElementById('al_status').value;
     const newLot = { id: genId(), lot, expiryDate, quantity, status };
+    if(lotDraftMismatch){ newLot.codeMismatch = lotDraftMismatch; }
     if(!Array.isArray(it.lots)) it.lots = [];
     it.lots.push(newLot);
     rec.items = its;
