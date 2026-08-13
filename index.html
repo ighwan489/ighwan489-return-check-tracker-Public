@@ -247,10 +247,23 @@
   .stat-chip.c-confirmed .n{ color:#A6E4C2; }
 
   .search-row{ margin-top:14px; position:relative; }
-  .search-row input{ width:100%; padding:11px 14px 11px 38px; border-radius:10px; border:none; font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:500; background:rgba(255,255,255,.95); color:var(--ink); }
+  .search-row input{ width:100%; padding:11px 44px 11px 38px; border-radius:10px; border:none; font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:500; background:rgba(255,255,255,.95); color:var(--ink); }
   .search-row input:focus{ outline:2px solid #FFD9B3; outline-offset:1px; }
   .search-icon{ position:absolute; left:13px; top:50%; transform:translateY(-50%); opacity:.5; font-size:14px; }
+  .multi-search-btn{ position:absolute; right:6px; top:50%; transform:translateY(-50%); width:29px; height:29px; border-radius:7px; border:none; background:var(--steel-dark); color:#fff; font-size:13px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+  .multi-chip{ margin-top:9px; display:flex; align-items:center; justify-content:space-between; gap:8px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.22); border-radius:9px; padding:8px 12px; }
+  .multi-chip span{ font-size:12px; font-weight:600; color:#fff; }
+  .multi-chip button{ background:none; border:none; color:#FFD9B3; font-weight:700; cursor:pointer; font-size:12px; padding:2px 4px; }
   .print-btn{ background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.25); color:#fff; border-radius:9px; cursor:pointer; font-weight:600; }
+  .print-btn.active-state{ background:#fff; color:var(--steel-dark); }
+  .card-select-chk{ width:19px; height:19px; margin-right:8px; flex-shrink:0; accent-color:var(--steel); cursor:pointer; }
+  .selection-bar{ display:flex; align-items:center; justify-content:space-between; gap:8px; background:#EAF0F5; border:1px solid #C7D8E5; border-radius:10px; padding:10px 14px; margin:0 0 12px; }
+  .selection-bar .left{ display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600; color:var(--steel-dark); }
+  .selection-bar .left input{ width:17px; height:17px; accent-color:var(--steel); cursor:pointer; }
+  .selection-bar .actions{ display:flex; gap:8px; }
+  .selection-bar button{ font-size:12.5px; font-weight:700; padding:7px 12px; border-radius:8px; border:none; cursor:pointer; }
+  .selection-bar .btn-sel-delete{ background:var(--danger); color:#fff; }
+  .selection-bar .btn-sel-clear{ background:none; color:var(--ink-muted); border:1px solid var(--line); }
 
   .tabs{ display:flex; gap:5px; margin-top:12px; }
   .tab{ flex:1; text-align:center; padding:8px 4px; border-radius:8px; font-size:11.5px; font-weight:600; background:rgba(255,255,255,.08); color:#C9D5DF; cursor:pointer; border:1px solid transparent; }
@@ -261,6 +274,7 @@
   .tab.active[data-filter="master"]{ background:var(--steel-dark); color:#fff; }
 
   .list{ padding:16px 14px 0; display:flex; flex-direction:column; gap:10px; }
+  #selectionBar{ margin:14px 14px 0; }
   .empty{ text-align:center; padding:60px 20px; color:var(--ink-muted); }
   .empty .big{ font-size:32px; margin-bottom:8px; }
   .empty p{ font-size:13.5px; margin:4px 0; }
@@ -410,7 +424,21 @@
     <div class="search-row">
       <span class="search-icon">🔍</span>
       <input id="searchInput" type="text" placeholder="반품번호, 제품코드, 제품명, LOT 검색" autocomplete="off">
+      <button class="multi-search-btn" id="openMultiSearch" title="여러 건 한번에 검색">☰</button>
     </div>
+    <div class="multi-chip" id="multiChip" style="display:none;"></div>
+    <div style="display:flex; gap:6px; margin-top:8px;">
+      <button class="print-btn" id="toggleDateFilter" style="flex:1;">📅 기간 조회</button>
+      <button class="print-btn" id="toggleSelectMode" style="flex:1;">☑️ 선택 모드</button>
+    </div>
+    <div id="dateFilterRow" style="display:none; gap:8px; margin-top:8px; align-items:center;">
+      <input type="date" id="dateFromInput" style="flex:1; padding:9px 8px; border-radius:8px; border:none; font-size:12.5px;">
+      <span style="color:#DCE5EC; font-size:12px;">~</span>
+      <input type="date" id="dateToInput" style="flex:1; padding:9px 8px; border-radius:8px; border:none; font-size:12.5px;">
+      <button class="print-btn" id="dateFilterApply" style="flex:0 0 auto; padding:9px 10px;">적용</button>
+      <button class="print-btn" id="dateFilterClear" style="flex:0 0 auto; padding:9px 10px;">해제</button>
+    </div>
+    <div id="dateFilterHint" style="display:none; font-size:11px; color:#DCE5EC; margin-top:6px;"></div>
     <button class="print-btn" id="openStartInspect" style="width:100%; margin-top:10px; padding:11px; font-size:13px;">📷 반품번호로 검수 시작 (촬영/입력)</button>
     <div class="tabs" id="tabs">
       <div class="tab active" data-filter="all">📋 전체</div>
@@ -420,6 +448,7 @@
     </div>
   </header>
 
+  <div id="selectionBar"></div>
   <div class="list" id="list"><div class="loading">불러오는 중...</div></div>
 </div>
 
@@ -442,6 +471,11 @@ let currentFilter = 'all';
 let searchTerm = '';
 let myName = '';
 let isGuestMode = false;
+let multiTokens = []; // 반품번호/LOT 여러 건 한번에 검색용
+let selectMode = false;
+let selectedIds = new Set();
+let dateFrom = '';
+let dateTo = '';
 
 function showToast(msg){ const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 2200); }
 function genId(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -508,7 +542,17 @@ function itemsOf(r){ return Array.isArray(r.items) ? r.items : []; }
 function getFiltered(){
   let list = [...records];
   if(currentFilter !== 'all') list = list.filter(r => r.status === currentFilter);
-  if(searchTerm.trim()){
+
+  if(multiTokens.length > 0){
+    list = list.filter(r => {
+      const rn = (r.returnNumber || '').toLowerCase();
+      if(multiTokens.some(t => rn === t || rn.includes(t))) return true;
+      return itemsOf(r).some(it => {
+        if((it.lot || '').toLowerCase() && multiTokens.some(t => (it.lot||'').toLowerCase() === t)) return true;
+        return Array.isArray(it.lots) && it.lots.some(l => multiTokens.some(t => (l.lot||'').toLowerCase() === t));
+      });
+    });
+  } else if(searchTerm.trim()){
     const q = searchTerm.trim().toLowerCase();
     list = list.filter(r => {
       if((r.returnNumber||'').toLowerCase().includes(q)) return true;
@@ -521,6 +565,22 @@ function getFiltered(){
       );
     });
   }
+
+  if(dateFrom || dateTo){
+    // 검수완료 탭에서는 검수완료일 기준, 그 외(전체/검수대기)는 등록일 기준으로 기간을 적용함
+    const useConfirmedDate = currentFilter === 'confirmed';
+    const fromTime = dateFrom ? new Date(dateFrom + 'T00:00:00').getTime() : null;
+    const toTime = dateTo ? new Date(dateTo + 'T23:59:59').getTime() : null;
+    list = list.filter(r => {
+      const basis = useConfirmedDate ? r.confirmedAt : r.registeredAt;
+      if(!basis) return false;
+      const t = new Date(basis).getTime();
+      if(fromTime !== null && t < fromTime) return false;
+      if(toTime !== null && t > toTime) return false;
+      return true;
+    });
+  }
+
   return list.sort((a,b) => new Date(b.registeredAt) - new Date(a.registeredAt));
 }
 
@@ -533,9 +593,12 @@ function isExcelItem(it){ return it.expectedQuantity !== undefined && it.expecte
 function render(){
   document.getElementById('pendingCount').textContent = records.filter(r => r.status === 'pending').length;
   document.getElementById('confirmedCount').textContent = records.filter(r => r.status === 'confirmed').length;
+  updateMultiChip();
+  updateDateFilterHint();
 
   const list = getFiltered();
   const el = document.getElementById('list');
+  renderSelectionBar(list);
   if(list.length === 0){
     el.innerHTML = `<div class="empty"><div class="big">📦</div><p><b>기록이 없어요</b></p><p>${records.length === 0 ? '우측 하단 + 버튼으로 첫 건을 등록해보세요' : '검색·필터 조건에 맞는 항목이 없어요'}</p></div>`;
     return;
@@ -551,9 +614,12 @@ function render(){
     <div class="card ${r.status}">
       <div class="card-inner">
         <div class="card-top">
-          <div>
-            <div class="lot">${escapeHtml(r.returnNumber || '(반품번호 미확인)')}</div>
-            <div class="product">${escapeHtml(r.hospitalName || '병원명 미입력')} · 품목 ${its.length}건</div>
+          <div style="display:flex; align-items:flex-start; min-width:0;">
+            ${(selectMode && !isGuestMode) ? `<input type="checkbox" class="card-select-chk" ${selectedIds.has(r.id) ? 'checked' : ''} onchange="toggleSelect('${r.id}', this.checked)">` : ''}
+            <div style="min-width:0;">
+              <div class="lot">${escapeHtml(r.returnNumber || '(반품번호 미확인)')}</div>
+              <div class="product">${escapeHtml(r.hospitalName || '병원명 미입력')} · 품목 ${its.length}건</div>
+            </div>
           </div>
           <span class="badge ${r.status}">${STATUS_ICON[r.status]} ${STATUS_LABEL[r.status]}</span>
         </div>
@@ -592,6 +658,166 @@ function render(){
       </div>
     </div>`;
   }).join('');
+}
+
+// ===================== 여러 건 한번에 검색 ===================== //
+
+function updateMultiChip(){
+  const chip = document.getElementById('multiChip');
+  const input = document.getElementById('searchInput');
+  if(multiTokens.length > 0){
+    const matched = records.filter(r => {
+      const rn = (r.returnNumber||'').toLowerCase();
+      if(multiTokens.some(t => rn === t || rn.includes(t))) return true;
+      return itemsOf(r).some(it => Array.isArray(it.lots) && it.lots.some(l => multiTokens.some(t => (l.lot||'').toLowerCase() === t)));
+    }).length;
+    chip.style.display = 'flex';
+    chip.innerHTML = `<span>반품번호/LOT ${multiTokens.length}건 다중검색 중 · 매칭 ${matched}건</span><button onclick="clearMultiSearch()">✕ 해제</button>`;
+    input.disabled = true;
+    input.value = '';
+    input.placeholder = `${multiTokens.length}건 다중검색 중`;
+  } else {
+    chip.style.display = 'none';
+    input.disabled = false;
+    input.placeholder = '반품번호, 제품코드, 제품명, LOT 검색';
+  }
+}
+
+function clearMultiSearch(){ multiTokens = []; render(); }
+
+function openMultiSearchModal(){
+  closeOverlay('multiSearchOverlay');
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'multiSearchOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>여러 건 한번에 검색</h2>
+    <div class="field">
+      <label>반품번호 또는 LOT 번호 목록</label>
+      <textarea id="msBox" style="min-height:140px;" placeholder="0042933059
+123456
+G5UM221">${multiTokens.length ? multiTokens.join('\n') : ''}</textarea>
+      <div class="hint">엑셀에서 반품번호(또는 LOT) 열을 복사해서 그대로 붙여넣으세요. 줄바꿈·쉼표·공백 구분 모두 인식해요.</div>
+    </div>
+    <div class="err" id="ms_err">1개 이상 입력해주세요</div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeOverlay('multiSearchOverlay')">취소</button>
+      <button class="btn-submit" onclick="applyMultiSearch()">검색 적용</button>
+    </div></div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('multiSearchOverlay'); });
+}
+
+function applyMultiSearch(){
+  const raw = document.getElementById('msBox').value;
+  const tokens = raw.split(/[\s,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+  const unique = [...new Set(tokens)];
+  if(unique.length === 0){ document.getElementById('ms_err').style.display = 'block'; return; }
+  multiTokens = unique;
+  searchTerm = '';
+  closeOverlay('multiSearchOverlay');
+  render();
+  showToast(`${unique.length}건 검색 적용`);
+}
+
+// ===================== 선택 모드 / 일괄 삭제 ===================== //
+
+function toggleSelectMode(){
+  selectMode = !selectMode;
+  if(!selectMode) selectedIds.clear();
+  document.getElementById('toggleSelectMode').classList.toggle('active-state', selectMode);
+  render();
+}
+
+function toggleSelect(id, checked){
+  if(checked) selectedIds.add(id);
+  else selectedIds.delete(id);
+  renderSelectionBar(getFiltered());
+}
+
+function toggleSelectAll(checked){
+  const ids = getFiltered().map(r => r.id);
+  if(checked) ids.forEach(id => selectedIds.add(id));
+  else ids.forEach(id => selectedIds.delete(id));
+  render();
+}
+
+function clearSelection(){ selectedIds.clear(); render(); }
+
+function renderSelectionBar(currentList){
+  const bar = document.getElementById('selectionBar');
+  if(!bar) return;
+  if(!selectMode || isGuestMode){ bar.innerHTML = ''; return; }
+  const count = selectedIds.size;
+  const visibleIds = currentList.map(r => r.id);
+  const allChecked = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id));
+  bar.innerHTML = `<div class="selection-bar">
+    <div class="left">
+      <input type="checkbox" id="selectAllChk" ${allChecked ? 'checked' : ''} onchange="toggleSelectAll(this.checked)">
+      <span>전체 선택 · ${count}건 선택됨</span>
+    </div>
+    <div class="actions">
+      <button class="btn-sel-clear" onclick="clearSelection()">선택 해제</button>
+      <button class="btn-sel-delete" onclick="openBulkDeleteModal()">선택 삭제</button>
+    </div>
+  </div>`;
+}
+
+function openBulkDeleteModal(){
+  const count = selectedIds.size;
+  if(count === 0){ showToast('선택된 항목이 없어요'); return; }
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'bulkDeleteOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>선택 항목 삭제</h2>
+    <p style="font-size:13.5px; color:var(--ink-muted); line-height:1.6;">선택하신 <b style="color:var(--danger);">${count}건</b>과 첨부된 품목·사진을 모두 삭제할까요?<br>삭제하면 되돌릴 수 없어요.</p>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeOverlay('bulkDeleteOverlay')">취소</button>
+      <button class="btn-submit" style="background:var(--danger);" id="bulkDeleteBtn">삭제</button>
+    </div></div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('bulkDeleteOverlay'); });
+  document.getElementById('bulkDeleteBtn').addEventListener('click', async ()=>{
+    const ids = [...selectedIds];
+    closeOverlay('bulkDeleteOverlay');
+    showToast(`${ids.length}건 삭제 중...`);
+    let successCount = 0;
+    for(const id of ids){
+      const ok = await window.fbDeleteRecord(id);
+      if(ok){
+        successCount++;
+        try{
+          const photos = await window.fbGetPhotos(id);
+          for(const p of photos){ await window.fbDeletePhoto(p.id); }
+        }catch(e){}
+      }
+    }
+    records = records.filter(r => !ids.includes(r.id));
+    selectedIds.clear();
+    render();
+    showToast(`${successCount}/${ids.length}건 삭제 완료`);
+  });
+}
+
+// ===================== 기간 조회 ===================== //
+
+function updateDateFilterHint(){
+  const hint = document.getElementById('dateFilterHint');
+  if(!hint) return;
+  if(dateFrom || dateTo){
+    const basisLabel = currentFilter === 'confirmed' ? '검수완료일' : '등록일';
+    hint.style.display = 'block';
+    hint.innerHTML = `📅 ${basisLabel} 기준 ${dateFrom || '처음'} ~ ${dateTo || '지금'} 조회 중 · <span style="text-decoration:underline; cursor:pointer;" onclick="clearDateFilter()">해제</span>`;
+  } else {
+    hint.style.display = 'none';
+    hint.innerHTML = '';
+  }
+}
+
+function clearDateFilter(){
+  dateFrom = ''; dateTo = '';
+  const f = document.getElementById('dateFromInput'); if(f) f.value = '';
+  const t = document.getElementById('dateToInput'); if(t) t.value = '';
+  render();
 }
 
 function showAppConfirm(message, confirmLabel, onConfirm){
@@ -3782,15 +4008,18 @@ function applyGuestModeUI(){
   const wizardItem = wizardBtn ? wizardBtn.closest('.fab-item') : null;
   const excelImportItem = excelImportBtn ? excelImportBtn.closest('.fab-item') : null;
   const masterTab = document.querySelector('.tab[data-filter="master"]');
+  const selectModeBtn = document.getElementById('toggleSelectMode');
   if(isGuestMode){
     if(wizardItem) wizardItem.style.display = 'none';
     if(excelImportItem) excelImportItem.style.display = 'none';
     if(masterTab) masterTab.style.display = 'none';
+    if(selectModeBtn) selectModeBtn.style.display = 'none';
     if(subtitle) subtitle.textContent = '반품인수증 · 실물 대조 검수 관리 (게스트)';
   } else {
     if(wizardItem) wizardItem.style.display = '';
     if(excelImportItem) excelImportItem.style.display = '';
     if(masterTab) masterTab.style.display = '';
+    if(selectModeBtn) selectModeBtn.style.display = '';
     if(subtitle) subtitle.textContent = '반품인수증 · 실물 대조 검수 관리';
   }
 }
@@ -3957,6 +4186,22 @@ document.getElementById('logoutBtn').addEventListener('click', ()=>{
   showAppConfirm('로그아웃 할까요?', '로그아웃', async ()=>{ await window.fbLogout(); });
 });
 document.getElementById('searchInput').addEventListener('input', (e)=>{ searchTerm = e.target.value; render(); });
+document.getElementById('openMultiSearch').addEventListener('click', openMultiSearchModal);
+document.getElementById('toggleSelectMode').addEventListener('click', toggleSelectMode);
+document.getElementById('toggleDateFilter').addEventListener('click', ()=>{
+  const row = document.getElementById('dateFilterRow');
+  const isHidden = row.style.display === 'none' || !row.style.display;
+  row.style.display = isHidden ? 'flex' : 'none';
+  document.getElementById('toggleDateFilter').classList.toggle('active-state', isHidden);
+});
+document.getElementById('dateFilterApply').addEventListener('click', ()=>{
+  dateFrom = document.getElementById('dateFromInput').value;
+  dateTo = document.getElementById('dateToInput').value;
+  if(!dateFrom && !dateTo){ showToast('시작일 또는 종료일을 선택해주세요'); return; }
+  render();
+  showToast('기간 조회 적용됨');
+});
+document.getElementById('dateFilterClear').addEventListener('click', clearDateFilter);
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', ()=>{
     if(tab.dataset.filter === 'master'){ openMasterMenuModal(); return; }
