@@ -448,6 +448,14 @@
   .login-input:focus{ outline:2px solid var(--steel); border-color:var(--steel); }
   .login-err{ color:var(--danger); font-size:12.5px; margin-top:8px; display:none; }
 </style>
+<script>
+  // 크롬이 "홈 화면에 추가/설치"를 자동으로 제안하려면 서비스워커 등록이 필요함 (오프라인 캐싱 목적 아님)
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', ()=>{
+      navigator.serviceWorker.register('/sw.js').catch(()=>{});
+    });
+  }
+</script>
 </head>
 <body>
 
