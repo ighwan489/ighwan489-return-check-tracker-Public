@@ -2203,7 +2203,9 @@ function renderCatalogList(filterText){
   }
   const shown = items.slice(0, 50);
   listEl.innerHTML = `<div class="hint" style="margin-bottom:8px;">${q ? `검색 결과 ${items.length}건` : `전체 ${items.length}건`}${items.length > 50 ? ' · 최근 50건만 표시 (검색해서 좁혀보세요)' : ''}</div>` +
-    shown.map(it => `
+    shown.map(it => {
+      const barcodes = (productMasterCrossCache || []).filter(b => b.productCode === it.code);
+      return `
     <div class="item-card">
       <div class="item-card-top">
         <div>
@@ -2215,7 +2217,72 @@ function renderCatalogList(filterText){
           <button onclick="deleteCatalogEntry('${escapeHtml(it.code)}')">삭제</button>
         </div>
       </div>
-    </div>`).join('');
+      <div style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--line);">
+        <div style="font-size:11px; color:var(--ink-muted); font-weight:600; margin-bottom:6px;">🗂 연결된 바코드 ${barcodes.length}건</div>
+        ${barcodes.map(b => `
+          <div style="display:flex; justify-content:space-between; align-items:center; background:#FBFCFD; border:1px solid var(--line); border-radius:7px; padding:6px 9px; margin-bottom:5px; font-size:11.5px;">
+            <span>끝 <b>${escapeHtml(b.key)}</b>${b.unit ? ` <span style="font-size:9.5px; font-weight:700; color:#fff; background:var(--steel); padding:1px 6px; border-radius:8px;">${escapeHtml(b.unit)}</span>` : ''}</span>
+            <span style="display:flex; gap:6px;">
+              <button style="font-size:10.5px; padding:3px 8px; border-radius:6px; border:1px solid var(--line); background:#fff; cursor:pointer;" onclick="openMasterModal(); setTimeout(()=>editMasterEntry('${escapeHtml(b.key)}','${escapeHtml(b.productCode)}','${escapeHtml(b.productName||'')}','${escapeHtml(b.unit||'')}'), 200)">수정</button>
+              <button style="font-size:10.5px; padding:3px 8px; border-radius:6px; border:1px solid var(--line); background:#fff; cursor:pointer;" onclick="quickDeleteBarcodeFromCatalog('${escapeHtml(b.key)}')">삭제</button>
+            </span>
+          </div>`).join('')}
+        <button style="width:100%; margin-top:2px; font-size:11.5px; padding:6px; border-radius:7px; border:1px dashed var(--steel); background:#F5F8FA; color:var(--steel-dark); cursor:pointer; font-weight:600;" onclick="openQuickAddBarcode('${escapeHtml(it.code)}','${escapeHtml(it.name)}')">+ 바코드 추가</button>
+      </div>
+    </div>`;
+    }).join('');
+}
+
+// 제품마스터 화면에서 바로 바코드 하나를 추가하는 간단한 미니 폼 (제품코드는 이미 알고 있으니 안 물어봄)
+function openQuickAddBarcode(productCode, productName){
+  closeOverlay('quickAddBarcodeOverlay');
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'quickAddBarcodeOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>바코드 추가 · ${escapeHtml(productCode)}</h2>
+    <div class="hint" style="margin-bottom:10px;">${escapeHtml(productName || productCode)}에 새 바코드를 연결해요. 박스용·낱개용처럼 바코드가 다르면 여러 개 등록할 수 있어요.</div>
+    <div class="field"><label>바코드 끝 6자리 *</label><input id="qab_key" type="text" placeholder="예: 097042" maxlength="6"></div>
+    <div class="field"><label>단위 (선택)</label>
+      <select id="qab_unit">
+        <option value="">미지정</option>
+        <option value="박스">박스</option>
+        <option value="낱개">낱개</option>
+      </select>
+    </div>
+    <div class="err" id="qab_err">바코드 끝 6자리를 입력해주세요</div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeOverlay('quickAddBarcodeOverlay')">취소</button>
+      <button class="btn-submit" id="qab_addBtn">추가</button>
+    </div></div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('quickAddBarcodeOverlay'); });
+
+  document.getElementById('qab_addBtn').addEventListener('click', async ()=>{
+    const key = document.getElementById('qab_key').value.trim();
+    const unit = document.getElementById('qab_unit').value;
+    if(!key){ document.getElementById('qab_err').style.display = 'block'; return; }
+    const ok = await window.fbSaveProductMaster(key, productCode, productName, unit, myName);
+    showToast(ok ? '바코드가 추가됐어요' : '저장에 실패했어요');
+    if(ok){
+      closeOverlay('quickAddBarcodeOverlay');
+      const list = await window.fbListProductMaster();
+      productMasterCrossCache = list;
+      masterListCache = list;
+      renderCatalogList(document.getElementById('pc_search') ? document.getElementById('pc_search').value : '');
+    }
+  });
+}
+
+async function quickDeleteBarcodeFromCatalog(key){
+  if(!confirm(`바코드 끝 ${key} 매핑을 삭제할까요?`)) return;
+  const ok = await window.fbDeleteProductMaster(key);
+  showToast(ok ? '삭제됐어요' : '삭제에 실패했어요');
+  if(ok){
+    const list = await window.fbListProductMaster();
+    productMasterCrossCache = list;
+    masterListCache = list;
+    renderCatalogList(document.getElementById('pc_search') ? document.getElementById('pc_search').value : '');
+  }
 }
 
 function editCatalogEntry(code, name){
@@ -4471,12 +4538,13 @@ function openMasterMenuModal(){
     <div class="hint" style="margin-bottom:14px;">반품처·제품·바코드 마스터 데이터를 관리해요.</div>
     <div class="master-menu-list">
       <button class="master-menu-item" id="mm_partner"><span class="mm-icon">🏢</span><span class="mm-text"><b>파트너</b><small>반품처 코드 · 이름 관리</small></span></button>
-      <button class="master-menu-item" id="mm_catalog"><span class="mm-icon">📦</span><span class="mm-text"><b>제품마스터</b><small>제품코드 · 제품명 관리</small></span></button>
-      <button class="master-menu-item" id="mm_barcode"><span class="mm-icon">🗂</span><span class="mm-text"><b>바코드매핑</b><small>GTIN 끝 6자리 · 제품코드 매핑</small></span></button>
+      <button class="master-menu-item" id="mm_catalog"><span class="mm-icon">📦</span><span class="mm-text"><b>제품마스터</b><small>제품코드 · 제품명 + 연결된 바코드까지 한 화면에서 관리</small></span></button>
+      <button class="master-menu-item" id="mm_barcode"><span class="mm-icon">🗂</span><span class="mm-text"><b>바코드 일괄등록</b><small>여러 건 한번에 붙여넣기 등록 (개별 관리는 제품마스터에서)</small></span></button>
       <button class="master-menu-item" id="mm_blockbatch"><span class="mm-icon">🚫</span><span class="mm-text"><b>블락배치</b><small>블락배치 제품코드·LOT 등록 - 검수 시 자동 인식</small></span></button>
       <button class="master-menu-item" id="mm_repair"><span class="mm-icon">🧹</span><span class="mm-text"><b>배송처코드 일괄 정리</b><small>코드가 비어있는 예전 기록을 파트너마스터로 자동 보정</small></span></button>
       <button class="master-menu-item" id="mm_logs"><span class="mm-icon">🕘</span><span class="mm-text"><b>정리 이력 보기</b><small>누가 언제 무슨 일괄정리를 실행했는지 확인</small></span></button>
       <button class="master-menu-item" id="mm_photocompress"><span class="mm-icon">🗜</span><span class="mm-text"><b>오래된 사진 압축 정리</b><small>90일 지난 검수완료 건의 사진을 더 작게 압축해서 용량 절약</small></span></button>
+      <button class="master-menu-item" id="mm_recogTest"><span class="mm-icon">🧪</span><span class="mm-text"><b>인식 테스트</b><small>실제 등록 없이 사진 인식 결과(바코드·GS1코드·라벨텍스트)만 확인</small></span></button>
     </div>
     <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('masterMenuOverlay')">닫기</button></div>
   </div>`;
@@ -4489,6 +4557,153 @@ function openMasterMenuModal(){
   document.getElementById('mm_repair').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); runPartnerCodeRepair(); });
   document.getElementById('mm_logs').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openMaintenanceLogModal(); });
   document.getElementById('mm_photocompress').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); runOldPhotoCompression(); });
+  document.getElementById('mm_recogTest').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openRecognitionTestModal(); });
+}
+
+// ===================== 인식 테스트 (실제 등록 없이 진단만) ===================== //
+// 반품번호 인식(인수증)과 제품 인식(바코드+GS1코드+라벨텍스트)을 사진 한 장으로 한번에 테스트해볼 수 있는 도구.
+// 실물검수/등록 흐름과 완전히 분리돼 있어서, 여기서 뭘 해도 실제 데이터에는 아무 영향 없음.
+
+function openRecognitionTestModal(){
+  closeOverlay('recogTestOverlay');
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'recogTestOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>인식 테스트</h2>
+    <div class="hint" style="margin-bottom:10px;">사진만 올려서 인식 결과를 확인하는 도구예요. 실제 반품 기록에는 전혀 저장되지 않아요.</div>
+    <div class="modal-tabs">
+      <div class="modal-tab active" data-mode="product" id="rtTabProduct">제품 (바코드+LOT+유효기간+코드)</div>
+      <div class="modal-tab" data-mode="receipt" id="rtTabReceipt">인수증 (반품번호+반품처)</div>
+    </div>
+
+    <div id="rtProductArea">
+      <div class="hint" style="margin-bottom:10px;">바코드 막대, 밑에 찍힌 (01)(10)(17) 코드, "LOT"/"유효기간" 같은 라벨 글자까지 사진 한 장에서 한번에 시도해요.</div>
+      <div class="capture-zone" id="rtProductZone">
+        📷 눌러서 촬영 또는 앨범에서 선택
+        <input type="file" id="rtProductInput" accept="image/*">
+      </div>
+      <div id="rtProductProgress" style="display:none;"><div class="ocr-progress">🔄 분석 중...</div></div>
+      <div id="rtProductResult" style="display:none;"></div>
+    </div>
+
+    <div id="rtReceiptArea" style="display:none;">
+      <div class="hint" style="margin-bottom:10px;">인수증 전체 또는 반품번호 부분만 확대해서 올려도 돼요.</div>
+      <div class="capture-zone" id="rtReceiptZone">
+        📷 눌러서 촬영 또는 앨범에서 선택
+        <input type="file" id="rtReceiptInput" accept="image/*">
+      </div>
+      <div id="rtReceiptProgress" style="display:none;"><div class="ocr-progress">🔄 분석 중...</div></div>
+      <div id="rtReceiptResult" style="display:none;"></div>
+    </div>
+
+    <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('recogTestOverlay')">닫기</button></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('recogTestOverlay'); });
+
+  overlay.querySelectorAll('.modal-tab').forEach(tab => {
+    tab.addEventListener('click', ()=>{
+      overlay.querySelectorAll('.modal-tab').forEach(t=>t.classList.remove('active'));
+      tab.classList.add('active');
+      const mode = tab.dataset.mode;
+      document.getElementById('rtProductArea').style.display = mode === 'product' ? 'block' : 'none';
+      document.getElementById('rtReceiptArea').style.display = mode === 'receipt' ? 'block' : 'none';
+    });
+  });
+
+  // ---- 제품 테스트: 바코드 그래픽 + GS1코드 + 라벨텍스트를 한 장으로 전부 시도 ----
+  const pZone = document.getElementById('rtProductZone');
+  const pInput = document.getElementById('rtProductInput');
+  pZone.addEventListener('click', ()=> pInput.click());
+  pInput.addEventListener('change', ()=>{
+    if(!pInput.files.length) return;
+    const file = pInput.files[0];
+    const reader = new FileReader();
+    reader.onload = async (e)=>{
+      const dataUrl = e.target.result;
+      pZone.innerHTML = `<img src="${dataUrl}" alt="테스트 사진"><input type="file" id="rtProductInput" accept="image/*" style="display:none;">`;
+      const progEl = document.getElementById('rtProductProgress');
+      const resEl = document.getElementById('rtProductResult');
+      resEl.style.display = 'none';
+      progEl.style.display = 'block';
+      progEl.querySelector('.ocr-progress').textContent = '🔄 바코드 스캔 중...';
+
+      const barcodeRaw = await decodeBarcodeFromImage(dataUrl);
+      const gs1FromBarcode = barcodeRaw ? parseGs1Raw(barcodeRaw) : null;
+
+      progEl.querySelector('.ocr-progress').textContent = '🔄 텍스트 OCR 중... (몇 초 걸려요)';
+      const ocrText = await runOcr(dataUrl);
+      const gs1FromText = extractGs1FromOcrText(ocrText);
+      const labelCode = extractProductCodeGuess(ocrText);
+      const labelLot = extractLotGuess(ocrText);
+      const labelExpiry = extractExpiryGuess(ocrText);
+
+      let masterHitInfo = '';
+      const gtinToCheck = (gs1FromBarcode && gs1FromBarcode.gtin) || gs1FromText.gtin;
+      if(gtinToCheck){
+        const hit = await window.fbGetProductMaster(gtinToCheck.slice(-6));
+        masterHitInfo = hit ? `✅ 바코드매핑 마스터에 등록됨 → ${hit.productCode} ${hit.productName ? '· ' + hit.productName : ''}${hit.unit ? ' (' + hit.unit + ')' : ''}`
+                            : `❌ 이 바코드(끝 ${gtinToCheck.slice(-6)})는 마스터에 등록 안 돼있어요`;
+      }
+
+      progEl.style.display = 'none';
+      resEl.style.display = 'block';
+      resEl.innerHTML = `
+        <div style="font-size:12.5px; font-weight:700; color:var(--steel-dark); margin:10px 0 6px;">① 바코드 그래픽 디코딩</div>
+        ${barcodeRaw
+          ? `<div class="memo">원시값: <code>${escapeHtml(barcodeRaw)}</code><br>GTIN: <b>${escapeHtml(gs1FromBarcode.gtin || '(없음)')}</b> · LOT: <b>${escapeHtml(gs1FromBarcode.lot || '(없음)')}</b> · 유효기간: <b>${escapeHtml(gs1FromBarcode.expiryDate || '(없음)')}</b></div>`
+          : `<div class="memo" style="color:var(--danger);">❌ 바코드 막대 인식 실패 - 여백을 두고 정면에서 다시 찍어보세요</div>`}
+
+        <div style="font-size:12.5px; font-weight:700; color:var(--steel-dark); margin:10px 0 6px;">② 텍스트에서 (01)(10)(17) GS1코드 찾기</div>
+        <div class="memo">GTIN: <b>${escapeHtml(gs1FromText.gtin || '(없음)')}</b> · LOT: <b>${escapeHtml(gs1FromText.lot || '(없음)')}</b> · 유효기간: <b>${escapeHtml(gs1FromText.expiryDate || '(없음)')}</b></div>
+
+        <div style="font-size:12.5px; font-weight:700; color:var(--steel-dark); margin:10px 0 6px;">③ "LOT"/"유효기간"/"REF" 라벨 글자로 찾기</div>
+        <div class="memo">제품코드: <b>${escapeHtml(labelCode || '(없음)')}</b> · LOT: <b>${escapeHtml(labelLot || '(없음)')}</b> · 유효기간: <b>${escapeHtml(labelExpiry || '(없음)')}</b></div>
+
+        ${masterHitInfo ? `<div style="font-size:12.5px; font-weight:700; color:var(--steel-dark); margin:10px 0 6px;">④ 바코드매핑 마스터 조회</div><div class="memo">${masterHitInfo}</div>` : ''}
+
+        <details style="margin-top:10px;">
+          <summary style="font-size:11.5px; color:var(--ink-muted); cursor:pointer; font-weight:600;">🔍 OCR 원문 전체 보기</summary>
+          <pre style="white-space:pre-wrap; font-size:10.5px; color:var(--ink-muted); background:#F7F8FA; padding:10px; border-radius:8px; margin-top:6px; max-height:220px; overflow-y:auto; font-family:'JetBrains Mono',monospace;">${escapeHtml(ocrText || '(인식된 텍스트 없음)')}</pre>
+        </details>`;
+      pInput.value = '';
+    };
+    reader.readAsDataURL(file);
+  });
+
+  // ---- 인수증 테스트: 반품번호 + 반품처 인식 ----
+  const rZone = document.getElementById('rtReceiptZone');
+  const rInput = document.getElementById('rtReceiptInput');
+  rZone.addEventListener('click', ()=> rInput.click());
+  rInput.addEventListener('change', ()=>{
+    if(!rInput.files.length) return;
+    const file = rInput.files[0];
+    const reader = new FileReader();
+    reader.onload = async (e)=>{
+      const dataUrl = e.target.result;
+      rZone.innerHTML = `<img src="${dataUrl}" alt="테스트 사진"><input type="file" id="rtReceiptInput" accept="image/*" style="display:none;">`;
+      const progEl = document.getElementById('rtReceiptProgress');
+      const resEl = document.getElementById('rtReceiptResult');
+      resEl.style.display = 'none';
+      progEl.style.display = 'block';
+
+      const { text, words } = await runReceiptOcr(dataUrl);
+      const foundNumber = extractReturnNumberGuess(words, text);
+      const foundHospital = extractHospitalGuessByWords(words, text);
+
+      progEl.style.display = 'none';
+      resEl.style.display = 'block';
+      resEl.innerHTML = `
+        <div class="memo">반품번호: <b>${escapeHtml(foundNumber || '(인식 안 됨)')}</b></div>
+        <div class="memo" style="margin-top:6px;">반품처(참고용, 실제로는 파트너마스터 검색 사용): <b>${escapeHtml(foundHospital || '(인식 안 됨)')}</b></div>
+        <details style="margin-top:10px;">
+          <summary style="font-size:11.5px; color:var(--ink-muted); cursor:pointer; font-weight:600;">🔍 OCR 원문 전체 보기</summary>
+          <pre style="white-space:pre-wrap; font-size:10.5px; color:var(--ink-muted); background:#F7F8FA; padding:10px; border-radius:8px; margin-top:6px; max-height:220px; overflow-y:auto; font-family:'JetBrains Mono',monospace;">${escapeHtml(text || '(인식된 텍스트 없음)')}</pre>
+        </details>`;
+      rInput.value = '';
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 async function runOldPhotoCompression(){
