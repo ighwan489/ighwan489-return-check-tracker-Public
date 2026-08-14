@@ -1137,8 +1137,12 @@ async function openDetail(id){
     html += `<div class="hint" style="margin-bottom:8px;">아직 첨부된 인수증 사진이 없어요</div>`;
   }
   if(!isGuestMode){
-    html += `<button class="btn-cancel" style="width:100%; margin-bottom:16px;" onclick="document.getElementById('detailReceiptInput').click()">📎 인수증 사진 첨부</button>
-    <input type="file" id="detailReceiptInput" accept="image/*" style="display:none;">`;
+    html += `<div style="display:flex; gap:8px; margin-bottom:16px;">
+      <button class="btn-cancel" style="flex:1;" onclick="document.getElementById('detailReceiptCameraInput').click()">📷 촬영</button>
+      <button class="btn-cancel" style="flex:1;" onclick="document.getElementById('detailReceiptGalleryInput').click()">🖼 앨범</button>
+    </div>
+    <input type="file" id="detailReceiptCameraInput" accept="image/*" capture="environment" style="display:none;">
+    <input type="file" id="detailReceiptGalleryInput" accept="image/*" style="display:none;">`;
   }
 
   its.forEach(it => {
@@ -1214,28 +1218,27 @@ async function openDetail(id){
     html += `<div class="hint" style="text-align:center; padding:12px 0;">등록된 품목이 없어요</div>`;
   }
   body.innerHTML = html;
-  const receiptInput = document.getElementById('detailReceiptInput');
-  if(receiptInput){
-    receiptInput.addEventListener('change', async ()=>{
-      if(!receiptInput.files.length) return;
-      const file = receiptInput.files[0];
-      const reader = new FileReader();
-      reader.onload = async (e)=>{
-        showToast('인수증 사진 업로드 중...');
-        const c = await compressPhoto(e.target.result);
-        const pid = await window.fbAddPhoto(id, null, 'receipt', c);
-        if(pid){
-          const rec = records.find(r => r.id === id);
-          if(rec){ rec.photoCount = (rec.photoCount || 0) + 1; await window.fbUpdateRecord(id, { photoCount: rec.photoCount }); render(); }
-          showToast('인수증 사진이 첨부됐어요');
-          openDetail(id);
-        } else {
-          showToast('업로드에 실패했어요');
-        }
-      };
-      reader.readAsDataURL(file);
-    });
-  }
+  const uploadReceiptFile = async (file)=>{
+    const reader = new FileReader();
+    reader.onload = async (e)=>{
+      showToast('인수증 사진 업로드 중...');
+      const c = await compressPhoto(e.target.result);
+      const pid = await window.fbAddPhoto(id, null, 'receipt', c);
+      if(pid){
+        const rec = records.find(r => r.id === id);
+        if(rec){ rec.photoCount = (rec.photoCount || 0) + 1; await window.fbUpdateRecord(id, { photoCount: rec.photoCount }); render(); }
+        showToast('인수증 사진이 첨부됐어요');
+        openDetail(id);
+      } else {
+        showToast('업로드에 실패했어요');
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+  const receiptCameraInput = document.getElementById('detailReceiptCameraInput');
+  const receiptGalleryInput = document.getElementById('detailReceiptGalleryInput');
+  if(receiptCameraInput) receiptCameraInput.addEventListener('change', ()=>{ if(receiptCameraInput.files.length) uploadReceiptFile(receiptCameraInput.files[0]); });
+  if(receiptGalleryInput) receiptGalleryInput.addEventListener('change', ()=>{ if(receiptGalleryInput.files.length) uploadReceiptFile(receiptGalleryInput.files[0]); });
 }
 
 async function deletePhotoFromDetail(recordId, photoId){
@@ -3031,10 +3034,14 @@ async function openStartInspectModal(){
     <h2>반품번호로 검수 시작</h2>
     <div class="hint" style="margin-bottom:10px;">등록된 반품번호를 입력하거나, 인수증을 촬영하면 반품번호를 자동으로 인식해서 찾아드려요.</div>
     <div class="field"><label>반품번호</label><input id="si_returnNumber" type="text" autocomplete="off" placeholder="직접 입력 또는 아래에서 촬영"></div>
-    <div class="capture-zone" id="si_zone">
-      📷 인수증 촬영해서 반품번호 자동 인식 (선택)
-      <input type="file" id="si_input" accept="image/*" style="display:none;">
+    <div class="hint" style="margin-bottom:6px;">📷 인수증 촬영해서 반품번호 자동 인식 (선택)</div>
+    <div style="display:flex; gap:8px; margin-bottom:10px;">
+      <button class="btn-cancel" style="flex:1;" id="si_cameraBtn">📷 카메라로 촬영</button>
+      <button class="btn-cancel" style="flex:1;" id="si_galleryBtn">🖼 앨범에서 선택</button>
     </div>
+    <input type="file" id="si_cameraInput" accept="image/*" capture="environment" style="display:none;">
+    <input type="file" id="si_galleryInput" accept="image/*" style="display:none;">
+    <div class="capture-zone" id="si_zone" style="display:none;"></div>
     <div id="si_progress" style="display:none;"><div class="ocr-progress">🔄 인식 중...</div></div>
     <div id="si_resultMsg" style="display:none;"></div>
     <div class="err" id="si_err">해당 반품번호의 등록 건을 찾지 못했어요 - 먼저 등록해주세요</div>
@@ -3048,15 +3055,17 @@ async function openStartInspectModal(){
 
   let capturedReceiptImage = null;
   const zone = document.getElementById('si_zone');
-  const input = document.getElementById('si_input');
-  zone.addEventListener('click', ()=> input.click());
-  input.addEventListener('change', ()=>{
-    if(!input.files.length) return;
-    const file = input.files[0];
+  const cameraInput = document.getElementById('si_cameraInput');
+  const galleryInput = document.getElementById('si_galleryInput');
+  document.getElementById('si_cameraBtn').addEventListener('click', ()=> cameraInput.click());
+  document.getElementById('si_galleryBtn').addEventListener('click', ()=> galleryInput.click());
+
+  const processSiFile = (file)=>{
     const reader = new FileReader();
     reader.onload = async (e)=>{
       capturedReceiptImage = e.target.result;
-      zone.innerHTML = `<img src="${capturedReceiptImage}" alt="인수증"><input type="file" id="si_input" accept="image/*" style="display:none;">`;
+      zone.style.display = 'block';
+      zone.innerHTML = `<img src="${capturedReceiptImage}" alt="인수증">`;
       document.getElementById('si_progress').style.display = 'block';
       const { text, words } = await runReceiptOcr(capturedReceiptImage);
       document.getElementById('si_progress').style.display = 'none';
@@ -3071,7 +3080,9 @@ async function openStartInspectModal(){
       }
     };
     reader.readAsDataURL(file);
-  });
+  };
+  cameraInput.addEventListener('change', ()=>{ if(cameraInput.files.length) processSiFile(cameraInput.files[0]); });
+  galleryInput.addEventListener('change', ()=>{ if(galleryInput.files.length) processSiFile(galleryInput.files[0]); });
 
   document.getElementById('si_findBtn').addEventListener('click', async ()=>{
     const rn = document.getElementById('si_returnNumber').value.trim();
@@ -3546,8 +3557,12 @@ async function openAddLotModal(recordId, itemId){
     <h2>LOT 추가 · ${escapeHtml(it.productName || it.productCode)}</h2>
     <div class="hint">제품코드 <b>${escapeHtml(it.productCode)}</b>가 실물과 맞는지 사진으로 대조해요. 예정 ${escapeHtml(String(it.expectedQuantity||''))}개 / 현재 확인 ${itemVerifiedQty(it)}개</div>
     <div class="photo-thumbs" id="al_thumbs"></div>
-    <button class="photo-add-btn" id="al_addPhotoBtn" style="margin-top:10px;">＋</button>
-    <input type="file" id="al_photoInput" accept="image/*" style="display:none;">
+    <div style="display:flex; gap:8px; margin-top:10px;">
+      <button class="photo-add-btn" id="al_addPhotoCameraBtn" style="width:auto; flex:1; height:44px; border-radius:9px; font-size:13px; gap:6px;">📷 촬영</button>
+      <button class="photo-add-btn" id="al_addPhotoGalleryBtn" style="width:auto; flex:1; height:44px; border-radius:9px; font-size:13px; gap:6px;">🖼 앨범</button>
+    </div>
+    <input type="file" id="al_photoCameraInput" accept="image/*" capture="environment" style="display:none;">
+    <input type="file" id="al_photoGalleryInput" accept="image/*" style="display:none;">
     <div id="al_progress" style="display:none;"><div class="ocr-progress">🔄 분석 중...</div></div>
     <div id="al_resultMsg" style="display:none;"></div>
     <div id="al_blockBatchBanner" style="display:none;"></div>
@@ -3585,12 +3600,15 @@ async function openAddLotModal(recordId, itemId){
   window.fbListCatalogItems().then(list => { productCatalogCache = list; });
   document.getElementById('al_codeSearch').addEventListener('input', (e)=> renderAlCodeSearchResult(e.target.value, it.productCode));
 
-  const addBtn = document.getElementById('al_addPhotoBtn');
-  const photoInput = document.getElementById('al_photoInput');
-  addBtn.addEventListener('click', ()=> photoInput.click());
-  photoInput.addEventListener('change', ()=>{
-    if(!photoInput.files.length) return;
-    const file = photoInput.files[0];
+  const cameraBtn = document.getElementById('al_addPhotoCameraBtn');
+  const galleryBtn = document.getElementById('al_addPhotoGalleryBtn');
+  const cameraInput = document.getElementById('al_photoCameraInput');
+  const galleryInput = document.getElementById('al_photoGalleryInput');
+  cameraBtn.addEventListener('click', ()=> cameraInput.click());
+  galleryBtn.addEventListener('click', ()=> galleryInput.click());
+  const handleLotPhotoChange = (srcInput)=>{
+    if(!srcInput.files.length) return;
+    const file = srcInput.files[0];
     const reader = new FileReader();
     reader.onload = async (e)=>{
       if(lotDraftGen !== myGen) return;
@@ -3734,10 +3752,12 @@ async function openAddLotModal(recordId, itemId){
           resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--ink-muted); background:#F1F3F5; padding:8px 10px; border-radius:8px;">인식된 정보가 없어요 - 직접 입력해주세요</div>${barcodeFailNote}${debugHtml}`;
         }
       }
-      photoInput.value = '';
+      srcInput.value = '';
     };
     reader.readAsDataURL(file);
-  });
+  };
+  cameraInput.addEventListener('change', ()=> handleLotPhotoChange(cameraInput));
+  galleryInput.addEventListener('change', ()=> handleLotPhotoChange(galleryInput));
 
   document.getElementById('al_saveBtn').addEventListener('click', async ()=>{
     const lot = document.getElementById('al_lot').value.trim();
