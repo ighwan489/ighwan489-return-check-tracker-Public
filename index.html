@@ -130,9 +130,9 @@
           return snap.exists() ? { id: snap.id, ...snap.data() } : null;
         }catch(e){ console.error('마스터 조회 실패:', e); return null; }
       };
-      window.fbSaveProductMaster = async function(key, productCode, productName, by){
+      window.fbSaveProductMaster = async function(key, productCode, productName, unit, by){
         try{
-          await setDoc(doc(masterCol, key), { key, productCode, productName: productName || '', updatedBy: by || '', updatedAt: new Date().toISOString() });
+          await setDoc(doc(masterCol, key), { key, productCode, productName: productName || '', unit: unit || '', updatedBy: by || '', updatedAt: new Date().toISOString() });
           return true;
         }catch(e){ console.error('마스터 저장 실패:', e); return false; }
       };
@@ -2060,7 +2060,10 @@ async function openProductCatalogModal(){
 
     <div class="loading" id="pc_loading" style="padding:24px 0;">불러오는 중...</div>
     <div id="pc_list" style="display:none; margin-top:14px;"></div>
-    <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('catalogOverlay')">닫기</button></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" style="flex:1;" onclick="closeOverlay('catalogOverlay')">닫기</button>
+      <button class="btn-submit" style="flex:0 0 auto; background:var(--blue);" id="pc_exportBtn">⬇ 엑셀 다운로드</button>
+    </div>
   </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('catalogOverlay'); });
@@ -2113,6 +2116,8 @@ async function openProductCatalogModal(){
       loadCatalogList();
     }
   });
+
+  document.getElementById('pc_exportBtn').addEventListener('click', exportCatalogToExcel);
 
   loadCatalogList();
 }
@@ -2225,6 +2230,42 @@ async function deleteCatalogEntry(code){
   loadCatalogList();
 }
 
+// ===================== 마스터 공용 엑셀 내보내기 헬퍼 ===================== //
+function exportRowsToExcel(rows, sheetName, filenamePrefix){
+  if(!rows || rows.length === 0){ showToast('내보낼 항목이 없어요'); return; }
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  const now = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  XLSX.writeFile(wb, `${filenamePrefix}_${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.xlsx`);
+  showToast(`${rows.length}건 엑셀로 다운로드 완료`);
+}
+
+function exportMasterListToExcel(){
+  const rows = (masterListCache || []).map(it => ({
+    '바코드끝6자리': it.key || '', '제품코드': it.productCode || '', '제품명': it.productName || '', '단위': it.unit || ''
+  }));
+  exportRowsToExcel(rows, '바코드매핑', '바코드매핑마스터');
+}
+
+function exportCatalogToExcel(){
+  const rows = (productCatalogCache || []).map(it => ({ '제품코드': it.code || '', '제품명': it.name || '' }));
+  exportRowsToExcel(rows, '제품마스터', '제품마스터');
+}
+
+function exportPartnerToExcel(){
+  const rows = (partnerMasterCache || []).map(it => ({ '파트너코드': it.code || '', '파트너명': it.name || '' }));
+  exportRowsToExcel(rows, '파트너마스터', '파트너마스터');
+}
+
+function exportBlockBatchToExcel(){
+  const rows = (blockBatchCache || []).map(it => ({
+    '제품코드': it.productCode || '', 'LOT': it.lot || '', '상태값': it.status || '', '비고': it.memo || ''
+  }));
+  exportRowsToExcel(rows, '블락배치', '블락배치마스터');
+}
+
 // ===================== 제품코드 마스터 관리 (바코드 끝 6자리 ↔ 제품코드) ===================== //
 
 async function openMasterModal(){
@@ -2233,7 +2274,7 @@ async function openMasterModal(){
   overlay.className = 'overlay'; overlay.id = 'masterOverlay';
   overlay.innerHTML = `<div class="modal">
     <h2>제품코드 마스터 관리</h2>
-    <div class="hint" style="margin-bottom:10px;">바코드(GTIN) 끝 6자리와 제품코드를 미리 등록해두면, 다음부터 실물사진 촬영 시 자동으로 제품코드가 채워져요. 촬영 중 자동 등록 제안을 받아도 되고, 여기서 직접 추가/수정해도 돼요.</div>
+    <div class="hint" style="margin-bottom:10px;">바코드(GTIN) 끝 6자리와 제품코드를 미리 등록해두면, 다음부터 실물사진 촬영 시 자동으로 제품코드가 채워져요. 같은 제품이라도 박스용·낱개용 바코드가 다르면 각각 따로 등록하시면 돼요(단위로 구분). 마스터에 없는 새 제품코드를 여기서 등록하면 제품마스터에도 자동으로 같이 등록돼요.</div>
     <div class="modal-tabs">
       <div class="modal-tab active" data-mode="single" id="mmTabSingle">개별 등록</div>
       <div class="modal-tab" data-mode="bulk" id="mmTabBulk">일괄 등록 (붙여넣기)</div>
@@ -2246,22 +2287,32 @@ async function openMasterModal(){
         <div id="mm_crossRef" style="display:none;"></div>
       </div>
       <div class="field"><label>제품명 (선택)</label><input id="mm_name" type="text" placeholder="예: AV-Set ONLINEplus 5008-R"></div>
+      <div class="field"><label>단위 (선택)</label>
+        <select id="mm_unit">
+          <option value="">미지정</option>
+          <option value="박스">박스</option>
+          <option value="낱개">낱개</option>
+        </select>
+      </div>
       <div class="err" id="mm_err">바코드 끝 6자리와 제품코드를 모두 입력해주세요</div>
       <button class="btn-submit" id="mm_addBtn" style="width:100%;">추가 / 수정</button>
     </div>
     <div id="mmBulkArea" style="display:none;">
       <div class="field">
-        <label>바코드끝6자리 · 제품코드 · 제품명 (탭 또는 쉼표 구분, 한 줄에 하나씩)</label>
-        <textarea id="mm_bulkBox" style="min-height:140px; font-family:'JetBrains Mono',monospace; font-size:12.5px;" placeholder="097042	F00005444	AV-Set ONLINEplus 5008-R
-000617	AP29022	씨에이피디17 밸런스Low Ca"></textarea>
-        <div class="hint">엑셀에서 3개 컬럼(바코드끝6자리·제품코드·제품명)을 그대로 드래그해서 복사·붙여넣기 하면 돼요. 제품명은 비워도 괜찮아요.</div>
+        <label>바코드끝6자리 · 제품코드 · 제품명 · 단위(박스/낱개, 선택) (탭 또는 쉼표 구분, 한 줄에 하나씩)</label>
+        <textarea id="mm_bulkBox" style="min-height:140px; font-family:'JetBrains Mono',monospace; font-size:12.5px;" placeholder="097042	F00005444	AV-Set ONLINEplus 5008-R	박스
+097043	F00005444	AV-Set ONLINEplus 5008-R	낱개"></textarea>
+        <div class="hint">엑셀에서 최대 4개 컬럼(바코드끝6자리·제품코드·제품명·단위)을 그대로 드래그해서 복사·붙여넣기 하면 돼요. 제품명·단위는 비워도 괜찮아요. 마스터에 없던 제품코드는 제품마스터에도 자동 등록돼요.</div>
       </div>
       <div class="err" id="mm_bulk_err">최소 1줄 이상, 바코드끝6자리·제품코드는 필수예요</div>
       <button class="btn-submit" id="mm_bulkAddBtn" style="width:100%;">일괄 등록</button>
     </div>
     <div class="loading" id="mm_loading" style="padding:24px 0;">불러오는 중...</div>
     <div id="mm_list" style="display:none; margin-top:14px;"></div>
-    <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('masterOverlay')">닫기</button></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" style="flex:1;" onclick="closeOverlay('masterOverlay')">닫기</button>
+      <button class="btn-submit" style="flex:0 0 auto; background:var(--blue);" id="mm_exportBtn">⬇ 엑셀 다운로드</button>
+    </div>
   </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('masterOverlay'); });
@@ -2276,6 +2327,16 @@ async function openMasterModal(){
     });
   });
 
+  // 새 제품코드는 제품마스터(카탈로그)에도 없으면 자동으로 같이 등록해줌 (이름이 있을 때만)
+  async function ensureCatalogHasCode(code, name, by){
+    if(!code || !name) return;
+    const exists = (catalogCrossCache || []).some(c => c.code === code);
+    if(!exists){
+      await window.fbSaveCatalogItem(code, name, by);
+      catalogCrossCache.push({ code, name });
+    }
+  }
+
   document.getElementById('mm_bulkAddBtn').addEventListener('click', async ()=>{
     const raw = document.getElementById('mm_bulkBox').value;
     const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
@@ -2284,7 +2345,8 @@ async function openMasterModal(){
       const key = (cols[0] || '').trim().replace(/\D/g, '').slice(-6);
       const code = (cols[1] || '').trim();
       const name = (cols[2] || '').trim();
-      return { key, code, name, valid: !!key && !!code };
+      const unit = (cols[3] || '').trim();
+      return { key, code, name, unit, valid: !!key && !!code };
     });
     const valid = parsed.filter(p => p.valid);
     if(valid.length === 0){ document.getElementById('mm_bulk_err').style.display = 'block'; return; }
@@ -2294,8 +2356,8 @@ async function openMasterModal(){
     let successCount = 0;
     for(let i = 0; i < valid.length; i++){
       const p = valid[i];
-      const ok = await window.fbSaveProductMaster(p.key, p.code, p.name, myName);
-      if(ok) successCount++;
+      const ok = await window.fbSaveProductMaster(p.key, p.code, p.name, p.unit, myName);
+      if(ok){ successCount++; await ensureCatalogHasCode(p.code, p.name, myName); }
       btn.textContent = `등록 중... (${i+1}/${valid.length})`;
     }
     btn.disabled = false; btn.textContent = '일괄 등록';
@@ -2308,17 +2370,22 @@ async function openMasterModal(){
     const key = document.getElementById('mm_key').value.trim();
     const code = document.getElementById('mm_code').value.trim();
     const name = document.getElementById('mm_name').value.trim();
+    const unit = document.getElementById('mm_unit').value;
     if(!key || !code){ document.getElementById('mm_err').style.display = 'block'; return; }
     document.getElementById('mm_err').style.display = 'none';
-    const ok = await window.fbSaveProductMaster(key, code, name, myName);
+    const ok = await window.fbSaveProductMaster(key, code, name, unit, myName);
+    if(ok) await ensureCatalogHasCode(code, name, myName);
     showToast(ok ? '마스터에 저장됐어요' : '저장에 실패했어요');
     if(ok){
       document.getElementById('mm_key').value = '';
       document.getElementById('mm_code').value = '';
       document.getElementById('mm_name').value = '';
+      document.getElementById('mm_unit').value = '';
       loadMasterList();
     }
   });
+
+  document.getElementById('mm_exportBtn').addEventListener('click', exportMasterListToExcel);
 
   window.fbListCatalogItems().then(list => { catalogCrossCache = list; });
   document.getElementById('mm_code').addEventListener('input', (e)=> renderMasterCrossRef(e.target.value));
@@ -2326,17 +2393,25 @@ async function openMasterModal(){
   loadMasterList();
 }
 
-// 바코드매핑 화면의 제품코드 입력창 옆에 제품마스터(제품명) 일치 여부를 바로 보여줌 - 화면 전환 없이 이름 대조 가능
+// 바코드매핑 화면의 제품코드 입력창 옆에: 제품마스터 이름 일치 여부 + 같은 제품코드로 이미 등록된 다른 바코드(단위)들을 같이 보여줌
 function renderMasterCrossRef(codeValue){
   const el = document.getElementById('mm_crossRef');
   if(!el) return;
-  const q = (codeValue || '').trim().toLowerCase();
+  const q = (codeValue || '').trim();
   if(!q){ el.style.display = 'none'; el.innerHTML = ''; return; }
-  const match = (catalogCrossCache || []).find(it => (it.code || '').toLowerCase() === q);
-  if(!match){ el.style.display = 'none'; el.innerHTML = ''; return; }
+  const catalogMatch = (catalogCrossCache || []).find(it => (it.code || '').toLowerCase() === q.toLowerCase());
+  const sameCodeMappings = (masterListCache || []).filter(it => it.productCode === q);
+  let html = '';
+  if(catalogMatch) html += `<div class="hint" style="margin-top:5px;">📦 제품마스터에 등록된 이름: <b>${escapeHtml(catalogMatch.name)}</b></div>`;
+  if(sameCodeMappings.length > 0){
+    html += `<div class="hint" style="margin-top:3px;">🔗 이 제품코드로 이미 등록된 바코드 ${sameCodeMappings.length}건: ${sameCodeMappings.map(m => `끝${escapeHtml(m.key)}${m.unit ? `(${escapeHtml(m.unit)})` : ''}`).join(', ')}</div>`;
+  }
+  if(!html){ el.style.display = 'none'; el.innerHTML = ''; return; }
   el.style.display = 'block';
-  el.innerHTML = `<div class="hint" style="margin-top:5px;">📦 제품마스터에 등록된 이름: <b>${escapeHtml(match.name)}</b></div>`;
+  el.innerHTML = html;
 }
+
+let masterListCache = [];
 
 async function loadMasterList(){
   const loading = document.getElementById('mm_loading');
@@ -2345,6 +2420,7 @@ async function loadMasterList(){
   loading.style.display = 'block';
   listEl.style.display = 'none';
   const items = await window.fbListProductMaster();
+  masterListCache = items;
   loading.style.display = 'none';
   listEl.style.display = 'block';
   if(items.length === 0){
@@ -2355,22 +2431,24 @@ async function loadMasterList(){
     <div class="item-card">
       <div class="item-card-top">
         <div>
-          <div class="it-lot">바코드 끝 ${escapeHtml(it.key)}</div>
+          <div class="it-lot">바코드 끝 ${escapeHtml(it.key)}${it.unit ? ` <span style="font-size:10px; font-weight:700; color:#fff; background:var(--steel); padding:1px 7px; border-radius:8px;">${escapeHtml(it.unit)}</span>` : ''}</div>
           <div class="it-name">→ ${escapeHtml(it.productCode)}</div>
           <div class="it-meta">${escapeHtml(it.productName || '')}</div>
         </div>
         <div class="it-actions">
-          <button onclick="editMasterEntry('${escapeHtml(it.key)}','${escapeHtml(it.productCode)}','${escapeHtml(it.productName||'')}')">수정</button>
+          <button onclick="editMasterEntry('${escapeHtml(it.key)}','${escapeHtml(it.productCode)}','${escapeHtml(it.productName||'')}','${escapeHtml(it.unit||'')}')">수정</button>
           <button onclick="deleteMasterEntry('${escapeHtml(it.key)}')">삭제</button>
         </div>
       </div>
     </div>`).join('');
 }
 
-function editMasterEntry(key, code, name){
+function editMasterEntry(key, code, name, unit){
   document.getElementById('mm_key').value = key;
   document.getElementById('mm_code').value = code;
   document.getElementById('mm_name').value = name;
+  const unitEl = document.getElementById('mm_unit');
+  if(unitEl) unitEl.value = unit || '';
 }
 
 async function deleteMasterEntry(key){
@@ -2426,7 +2504,10 @@ async function openPartnerModal(){
 
     <div class="loading" id="pm_loading" style="padding:24px 0;">불러오는 중...</div>
     <div id="pm_list" style="display:none; margin-top:14px;"></div>
-    <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('partnerOverlay')">닫기</button></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" style="flex:1;" onclick="closeOverlay('partnerOverlay')">닫기</button>
+      <button class="btn-submit" style="flex:0 0 auto; background:var(--blue);" id="pm_exportBtn">⬇ 엑셀 다운로드</button>
+    </div>
   </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('partnerOverlay'); });
@@ -2477,6 +2558,8 @@ async function openPartnerModal(){
       loadPartnerList();
     }
   });
+
+  document.getElementById('pm_exportBtn').addEventListener('click', exportPartnerToExcel);
 
   loadPartnerList();
 }
@@ -4075,7 +4158,7 @@ function wzCommitDraftItem(){
         ? `이 바코드의 마스터 제품코드가 "${committed.masterOriginalCode}"였는데 "${committed.productCode}"로 수정하셨어요.\n마스터를 새 값으로 업데이트할까요?`
         : `이 바코드(끝 6자리: ${committed.gtinLast6})를 제품코드 "${committed.productCode}"로 마스터에 등록해서 다음부터 자동 인식되게 할까요?`;
       showAppConfirm(msg, '마스터 등록', async ()=>{
-        const ok = await window.fbSaveProductMaster(committed.gtinLast6, committed.productCode, committed.productName, myName);
+        const ok = await window.fbSaveProductMaster(committed.gtinLast6, committed.productCode, committed.productName, '', myName);
         showToast(ok ? '마스터에 등록됐어요 - 다음부터 자동 인식돼요' : '마스터 등록에 실패했어요');
       });
     }
@@ -4485,7 +4568,10 @@ F00012014	BBBBB	B	테스트 품질"></textarea>
     </div>
     <div class="loading" id="bb_loading" style="padding:24px 0;">불러오는 중...</div>
     <div id="bb_list" style="display:none; margin-top:14px;"></div>
-    <div class="modal-actions"><button class="btn-cancel" style="flex:1;" onclick="closeOverlay('blockBatchOverlay')">닫기</button></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" style="flex:1;" onclick="closeOverlay('blockBatchOverlay')">닫기</button>
+      <button class="btn-submit" style="flex:0 0 auto; background:var(--blue);" id="bb_exportBtn">⬇ 엑셀 다운로드</button>
+    </div>
   </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('blockBatchOverlay'); });
@@ -4547,6 +4633,8 @@ F00012014	BBBBB	B	테스트 품질"></textarea>
       loadBlockBatchList();
     }
   });
+
+  document.getElementById('bb_exportBtn').addEventListener('click', exportBlockBatchToExcel);
 
   loadBlockBatchList();
 }
