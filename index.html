@@ -15,6 +15,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Space+Grotesk:wght@700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.0.4/tesseract.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
 <script type="module">
@@ -4342,12 +4343,26 @@ function exportToExcel(){
 // 반품번호(주문번호) → 제품코드 → LOT 순으로 오름차순 정렬해서, 같은 제품이라도 LOT이 다르면 줄을 나눠서 내보냄.
 // 반품 사유 / QREM발송예정 / 비고는 항상 빈칸으로 남겨서 엑셀에서 직접 채우도록 함.
 
+// 파트너마스터는 수천 건일 수 있어서(반품처 목록 전체 조회) 다운로드마다 매번 새로 불러오면 느려짐.
+// 5분 이내 재요청이면 캐시를 재사용해서 반품 건수와 무관하게 이 부분 대기시간을 줄임.
+let partnerListFetchCache = { data: null, at: 0 };
+async function getPartnerListCached(){
+  const now = Date.now();
+  if(partnerListFetchCache.data && (now - partnerListFetchCache.at) < 5 * 60 * 1000){
+    return partnerListFetchCache.data;
+  }
+  const list = await window.fbListPartnerMaster();
+  partnerListFetchCache = { data: list, at: now };
+  return list;
+}
+
 async function exportToCompanyFormat(){
   const list = getFiltered();
   if(list.length === 0){ showToast('내보낼 항목이 없어요'); return; }
+  showToast('엑셀 만드는 중...');
 
   // partnerCode가 비어있는 기존(수정 전) 기록도 배송처명에 남아있는 코드 접두어로 보정해서 내보냄
-  const partnerList = await window.fbListPartnerMaster();
+  const partnerList = await getPartnerListCached();
   partnerMasterCache = partnerList;
 
   const rows = [];
@@ -4367,22 +4382,9 @@ async function exportToCompanyFormat(){
         if(mismatch) noteParts.push(`${mismatch.expectedCode}에서 ${mismatch.scannedCode}로 변경됨`);
         if(block) noteParts.push(block.memo && block.memo.trim() ? block.memo.trim() : '블락배치');
         rows.push({
-          '입고일자': receivedDate,
-          '주문번호': r.returnNumber || '',
-          '배송처코드': partnerCode,
-          '배송처명': partnerName,
-          '제품코드': it.productCode || '',
-          '제품명': it.productName || '',
-          'LOT': l.lot || '',
-          '유효기간': l.expiryDate || '',
-          '기존': 'X',
-          '변경': l.status || '',
-          '수량': l.quantity || '',
-          '반품 사유': '',
-          'QREM발송예정': '',
-          '비고': noteParts.join(' / '),
-          '확인된제품코드': mismatch ? mismatch.scannedCode : '',
-          __highlightType: block ? 'block' : (mismatch ? 'mismatch' : '')
+          vals: [receivedDate, r.returnNumber || '', partnerCode, partnerName, it.productCode || '', it.productName || '',
+            l.lot || '', l.expiryDate || '', 'X', l.status || '', l.quantity || '', '', '', noteParts.join(' / '), mismatch ? mismatch.scannedCode : ''],
+          highlightType: block ? 'block' : (mismatch ? 'mismatch' : '')
         });
       });
     });
@@ -4390,46 +4392,46 @@ async function exportToCompanyFormat(){
 
   if(rows.length === 0){ showToast('내보낼 품목이 없어요'); return; }
 
-  // 반품번호 → 제품코드 → LOT 오름차순 정렬 (같은 제품이라도 LOT이 다르면 각각 줄이 나뉘어 보기 편하게 정리됨)
+  // 반품번호(vals[1]) → 제품코드(vals[4]) → LOT(vals[6]) 오름차순 정렬
   rows.sort((a, b) => {
-    const rn = String(a['주문번호']).localeCompare(String(b['주문번호']), 'ko');
+    const rn = String(a.vals[1]).localeCompare(String(b.vals[1]), 'ko');
     if(rn !== 0) return rn;
-    const pc = String(a['제품코드']).localeCompare(String(b['제품코드']), 'ko');
+    const pc = String(a.vals[4]).localeCompare(String(b.vals[4]), 'ko');
     if(pc !== 0) return pc;
-    return String(a['LOT']).localeCompare(String(b['LOT']), 'ko');
+    return String(a.vals[6]).localeCompare(String(b.vals[6]), 'ko');
   });
-
-  // 정렬이 끝난 뒤의 최종 순서 기준으로 강조할 행을 뽑고, 시트에는 안 보일 내부 플래그(__highlightType)는 제거
-  // 블락배치는 진한 파랑(Text2, 60% 밝게), 제품코드 불일치(정품이지만 다른 코드로 확인된 경우)는 노랑으로 구분
-  const highlightRowMap = {}; // rowIdx -> 'block' | 'mismatch'
-  rows.forEach((row, i) => { if(row.__highlightType) highlightRowMap[i] = row.__highlightType; delete row.__highlightType; });
 
   const headerOrder = ['입고일자','주문번호','배송처코드','배송처명','제품코드','제품명','LOT','유효기간','기존','변경','수량','반품 사유','QREM발송예정','비고','확인된제품코드'];
-  const ws = XLSX.utils.json_to_sheet(rows, { header: headerOrder });
-  ws['!cols'] = [
-    {wch:12},{wch:14},{wch:14},{wch:24},{wch:12},{wch:30},
-    {wch:14},{wch:12},{wch:8},{wch:8},{wch:8},{wch:14},{wch:16},{wch:20},{wch:14}
-  ];
+  const colWidths = [12,14,14,24,12,30,14,12,8,8,8,14,16,20,14];
 
-  // 블락배치: 진한 파랑, 텍스트 2, 60% 더 밝게(엑셀 표준 팔레트 근사값) / 제품코드 다름(정품 확인됨): 노랑
-  const FILL_BLOCK = { patternType: 'solid', fgColor: { rgb: 'B4C6E7' } };
-  const FILL_MISMATCH = { patternType: 'solid', fgColor: { rgb: 'FFFF00' } };
-  Object.keys(highlightRowMap).forEach(key => {
-    const rowIdx = parseInt(key, 10);
-    const fill = highlightRowMap[rowIdx] === 'block' ? FILL_BLOCK : FILL_MISMATCH;
-    const excelRow = rowIdx + 2; // 1-based, 헤더 다음줄부터
-    headerOrder.forEach((h, colIdx) => {
-      const cellRef = XLSX.utils.encode_cell({ r: excelRow - 1, c: colIdx });
-      if(!ws[cellRef]) ws[cellRef] = { t: 's', v: '' };
-      ws[cellRef].s = { fill };
-    });
+  // ExcelJS는 셀 배경색을 실제로 저장 지원함 (SheetJS 무료버전은 스타일 저장을 지원 안 해서 안 보였던 것)
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('반품레포트');
+  sheet.columns = headerOrder.map((h, i) => ({ header: h, key: 'c' + i, width: colWidths[i] }));
+
+  // 블락배치: 진한 파랑(텍스트2, 60% 밝게 근사) / 제품코드 다름(정품 확인됨): 노랑
+  const FILL_BLOCK = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB4C6E7' } };
+  const FILL_MISMATCH = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } };
+
+  rows.forEach(row => {
+    const excelRow = sheet.addRow(row.vals);
+    if(row.highlightType){
+      const fill = row.highlightType === 'block' ? FILL_BLOCK : FILL_MISMATCH;
+      excelRow.eachCell({ includeEmpty: true }, cell => { cell.fill = fill; });
+    }
   });
+  sheet.getRow(1).font = { bold: true };
 
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, '반품레포트');
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const now = new Date();
   const pad = n => String(n).padStart(2,'0');
-  XLSX.writeFile(wb, `반품레포트양식_${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.xlsx`, { cellStyles: true });
+  const filename = `반품레포트양식_${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.xlsx`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=> URL.revokeObjectURL(url), 30000);
   showToast(`${rows.length}건 반품레포트 양식으로 다운로드 완료`);
 }
 
