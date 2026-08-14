@@ -4382,7 +4382,7 @@ async function exportToCompanyFormat(){
           'QREM발송예정': '',
           '비고': noteParts.join(' / '),
           '확인된제품코드': mismatch ? mismatch.scannedCode : '',
-          __highlight: !!(mismatch || block)
+          __highlightType: block ? 'block' : (mismatch ? 'mismatch' : '')
         });
       });
     });
@@ -4399,9 +4399,10 @@ async function exportToCompanyFormat(){
     return String(a['LOT']).localeCompare(String(b['LOT']), 'ko');
   });
 
-  // 정렬이 끝난 뒤의 최종 순서 기준으로 강조할 행을 뽑고, 시트에는 안 보일 내부 플래그(__highlight)는 제거
-  const highlightRowIdx = [];
-  rows.forEach((row, i) => { if(row.__highlight) highlightRowIdx.push(i); delete row.__highlight; });
+  // 정렬이 끝난 뒤의 최종 순서 기준으로 강조할 행을 뽑고, 시트에는 안 보일 내부 플래그(__highlightType)는 제거
+  // 블락배치는 진한 파랑(Text2, 60% 밝게), 제품코드 불일치(정품이지만 다른 코드로 확인된 경우)는 노랑으로 구분
+  const highlightRowMap = {}; // rowIdx -> 'block' | 'mismatch'
+  rows.forEach((row, i) => { if(row.__highlightType) highlightRowMap[i] = row.__highlightType; delete row.__highlightType; });
 
   const headerOrder = ['입고일자','주문번호','배송처코드','배송처명','제품코드','제품명','LOT','유효기간','기존','변경','수량','반품 사유','QREM발송예정','비고','확인된제품코드'];
   const ws = XLSX.utils.json_to_sheet(rows, { header: headerOrder });
@@ -4410,14 +4411,17 @@ async function exportToCompanyFormat(){
     {wch:14},{wch:12},{wch:8},{wch:8},{wch:8},{wch:14},{wch:16},{wch:20},{wch:14}
   ];
 
-  // 제품코드 불일치·블락배치 행 전체를 하늘색으로 칠해서 한눈에 확인되게 함 (헤더는 1행이라 실제 데이터는 2행부터)
-  const HIGHLIGHT_FILL = { patternType: 'solid', fgColor: { rgb: 'BDD7EE' } };
-  highlightRowIdx.forEach(rowIdx => {
+  // 블락배치: 진한 파랑, 텍스트 2, 60% 더 밝게(엑셀 표준 팔레트 근사값) / 제품코드 다름(정품 확인됨): 노랑
+  const FILL_BLOCK = { patternType: 'solid', fgColor: { rgb: 'B4C6E7' } };
+  const FILL_MISMATCH = { patternType: 'solid', fgColor: { rgb: 'FFFF00' } };
+  Object.keys(highlightRowMap).forEach(key => {
+    const rowIdx = parseInt(key, 10);
+    const fill = highlightRowMap[rowIdx] === 'block' ? FILL_BLOCK : FILL_MISMATCH;
     const excelRow = rowIdx + 2; // 1-based, 헤더 다음줄부터
     headerOrder.forEach((h, colIdx) => {
       const cellRef = XLSX.utils.encode_cell({ r: excelRow - 1, c: colIdx });
       if(!ws[cellRef]) ws[cellRef] = { t: 's', v: '' };
-      ws[cellRef].s = { fill: HIGHLIGHT_FILL };
+      ws[cellRef].s = { fill };
     });
   });
 
