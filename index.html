@@ -352,7 +352,7 @@
   .btn-del:hover{ color:var(--danger); border-color:var(--danger); }
   .btn-edit{ background:none; color:var(--steel); border:1px solid var(--line); }
 
-  .fab-toggle{ position:fixed; right:20px; bottom:20px; z-index:31; width:56px; height:56px; border-radius:50%; border:none; background:var(--amber); color:#fff; font-size:26px; font-weight:700; box-shadow:0 4px 14px rgba(180,83,10,.4); cursor:pointer; display:flex; align-items:center; justify-content:center; max-width:720px; margin:0 auto; transition:transform .2s ease, background .2s ease; }
+  .fab-toggle{ position:fixed; right:20px; bottom:20px; z-index:31; width:56px; height:56px; border-radius:50%; border:none; background:var(--amber); color:#fff; font-size:26px; font-weight:700; box-shadow:0 4px 14px rgba(180,83,10,.4); cursor:pointer; display:flex; align-items:center; justify-content:center; max-width:720px; margin:0 auto; transition:transform .2s ease, background .2s ease; clip-path:circle(50%); }
   .fab-toggle.open{ transform:rotate(45deg); background:var(--steel-dark); }
   .fab-backdrop{ position:fixed; inset:0; z-index:29; background:rgba(20,26,33,.25); opacity:0; pointer-events:none; transition:opacity .18s ease; }
   .fab-backdrop.open{ opacity:1; pointer-events:auto; }
@@ -360,14 +360,15 @@
   .fab-menu.open{ opacity:1; pointer-events:auto; transform:translateY(0); }
   .fab-item{ display:flex; align-items:center; gap:10px; }
   .fab-item .fab-label{ background:var(--steel-dark); color:#fff; font-size:12px; font-weight:700; padding:7px 13px; border-radius:8px; white-space:nowrap; box-shadow:0 2px 8px rgba(0,0,0,.18); }
-  .fab-item button{ width:46px; height:46px; border-radius:50%; border:none; color:#fff; font-size:19px; cursor:pointer; display:flex; align-items:center; justify-content:center; box-shadow:0 4px 14px rgba(0,0,0,.25); flex-shrink:0; }
+  .fab-item button{ width:46px; height:46px; border-radius:50%; border:none; color:#fff; font-size:19px; cursor:pointer; display:flex; align-items:center; justify-content:center; box-shadow:0 4px 14px rgba(0,0,0,.25); flex-shrink:0; clip-path:circle(50%); }
   .fab-item button.i-primary{ background:var(--amber); }
   .fab-item button.i-steel{ background:var(--steel); }
   .fab-item button.i-green{ background:var(--green); }
   .fab-item button.i-blue{ background:var(--blue); }
   .fab-wrap{ position:fixed; left:0; right:0; bottom:0; z-index:32; display:flex; justify-content:center; pointer-events:none; }
   .fab-wrap .fab-inner{ position:relative; width:100%; max-width:720px; height:0; pointer-events:none; }
-  .fab-wrap .fab-toggle, .fab-wrap .fab-backdrop, .fab-wrap .fab-menu{ pointer-events:auto; }
+  .fab-wrap .fab-toggle, .fab-wrap .fab-backdrop{ pointer-events:auto; }
+  .fab-wrap .fab-menu.open{ pointer-events:auto; }
 
   .wizard-steps{ display:flex; gap:4px; margin-bottom:16px; }
   .wizard-steps .ws{ flex:1; height:4px; border-radius:4px; background:var(--line); }
@@ -4626,20 +4627,26 @@ function openRecognitionTestModal(){
 
     <div id="rtProductArea">
       <div class="hint" style="margin-bottom:10px;">바코드 막대, 밑에 찍힌 (01)(10)(17) 코드, "LOT"/"유효기간" 같은 라벨 글자까지 사진 한 장에서 한번에 시도해요.</div>
-      <div class="capture-zone" id="rtProductZone">
-        🖼 눌러서 사진 선택
-        <input type="file" id="rtProductInput" accept="image/*">
+      <div style="display:flex; gap:8px; margin-bottom:10px;">
+        <button class="btn-cancel" style="flex:1;" id="rtProductCameraBtn">📷 카메라로 촬영</button>
+        <button class="btn-cancel" style="flex:1;" id="rtProductGalleryBtn">🖼 앨범에서 선택</button>
       </div>
+      <input type="file" id="rtProductCameraInput" accept="image/*" capture="environment" style="display:none;">
+      <input type="file" id="rtProductGalleryInput" accept="image/*" style="display:none;">
+      <div class="capture-zone" id="rtProductZone" style="display:none;"></div>
       <div id="rtProductProgress" style="display:none;"><div class="ocr-progress">🔄 분석 중...</div></div>
       <div id="rtProductResult" style="display:none;"></div>
     </div>
 
     <div id="rtReceiptArea" style="display:none;">
       <div class="hint" style="margin-bottom:10px;">인수증 전체 또는 반품번호 부분만 확대해서 올려도 돼요.</div>
-      <div class="capture-zone" id="rtReceiptZone">
-        🖼 눌러서 사진 선택
-        <input type="file" id="rtReceiptInput" accept="image/*">
+      <div style="display:flex; gap:8px; margin-bottom:10px;">
+        <button class="btn-cancel" style="flex:1;" id="rtReceiptCameraBtn">📷 카메라로 촬영</button>
+        <button class="btn-cancel" style="flex:1;" id="rtReceiptGalleryBtn">🖼 앨범에서 선택</button>
       </div>
+      <input type="file" id="rtReceiptCameraInput" accept="image/*" capture="environment" style="display:none;">
+      <input type="file" id="rtReceiptGalleryInput" accept="image/*" style="display:none;">
+      <div class="capture-zone" id="rtReceiptZone" style="display:none;"></div>
       <div id="rtReceiptProgress" style="display:none;"><div class="ocr-progress">🔄 분석 중...</div></div>
       <div id="rtReceiptResult" style="display:none;"></div>
     </div>
@@ -4661,15 +4668,19 @@ function openRecognitionTestModal(){
 
   // ---- 제품 테스트: 바코드 그래픽 + GS1코드 + 라벨텍스트를 한 장으로 전부 시도 ----
   const pZone = document.getElementById('rtProductZone');
-  const pInput = document.getElementById('rtProductInput');
-  pZone.addEventListener('click', ()=> pInput.click());
-  pInput.addEventListener('change', ()=>{
-    if(!pInput.files.length) return;
-    const file = pInput.files[0];
+  const pCameraBtn = document.getElementById('rtProductCameraBtn');
+  const pGalleryBtn = document.getElementById('rtProductGalleryBtn');
+  const pCameraInput = document.getElementById('rtProductCameraInput');
+  const pGalleryInput = document.getElementById('rtProductGalleryInput');
+  pCameraBtn.addEventListener('click', ()=> pCameraInput.click());
+  pGalleryBtn.addEventListener('click', ()=> pGalleryInput.click());
+
+  async function processProductTestFile(file){
     const reader = new FileReader();
     reader.onload = async (e)=>{
       const dataUrl = e.target.result;
-      pZone.innerHTML = `<img src="${dataUrl}" alt="테스트 사진"><input type="file" id="rtProductInput" accept="image/*" style="display:none;">`;
+      pZone.style.display = 'block';
+      pZone.innerHTML = `<img src="${dataUrl}" alt="테스트 사진">`;
       const progEl = document.getElementById('rtProductProgress');
       const resEl = document.getElementById('rtProductResult');
       resEl.style.display = 'none';
@@ -4714,22 +4725,27 @@ function openRecognitionTestModal(){
           <summary style="font-size:11.5px; color:var(--ink-muted); cursor:pointer; font-weight:600;">🔍 OCR 원문 전체 보기</summary>
           <pre style="white-space:pre-wrap; font-size:10.5px; color:var(--ink-muted); background:#F7F8FA; padding:10px; border-radius:8px; margin-top:6px; max-height:220px; overflow-y:auto; font-family:'JetBrains Mono',monospace;">${escapeHtml(ocrText || '(인식된 텍스트 없음)')}</pre>
         </details>`;
-      pInput.value = '';
     };
     reader.readAsDataURL(file);
-  });
+  }
+  pCameraInput.addEventListener('change', ()=>{ if(pCameraInput.files.length){ processProductTestFile(pCameraInput.files[0]); pCameraInput.value = ''; } });
+  pGalleryInput.addEventListener('change', ()=>{ if(pGalleryInput.files.length){ processProductTestFile(pGalleryInput.files[0]); pGalleryInput.value = ''; } });
 
   // ---- 인수증 테스트: 반품번호 + 반품처 인식 ----
   const rZone = document.getElementById('rtReceiptZone');
-  const rInput = document.getElementById('rtReceiptInput');
-  rZone.addEventListener('click', ()=> rInput.click());
-  rInput.addEventListener('change', ()=>{
-    if(!rInput.files.length) return;
-    const file = rInput.files[0];
+  const rCameraBtn = document.getElementById('rtReceiptCameraBtn');
+  const rGalleryBtn = document.getElementById('rtReceiptGalleryBtn');
+  const rCameraInput = document.getElementById('rtReceiptCameraInput');
+  const rGalleryInput = document.getElementById('rtReceiptGalleryInput');
+  rCameraBtn.addEventListener('click', ()=> rCameraInput.click());
+  rGalleryBtn.addEventListener('click', ()=> rGalleryInput.click());
+
+  async function processReceiptTestFile(file){
     const reader = new FileReader();
     reader.onload = async (e)=>{
       const dataUrl = e.target.result;
-      rZone.innerHTML = `<img src="${dataUrl}" alt="테스트 사진"><input type="file" id="rtReceiptInput" accept="image/*" style="display:none;">`;
+      rZone.style.display = 'block';
+      rZone.innerHTML = `<img src="${dataUrl}" alt="테스트 사진">`;
       const progEl = document.getElementById('rtReceiptProgress');
       const resEl = document.getElementById('rtReceiptResult');
       resEl.style.display = 'none';
@@ -4748,10 +4764,11 @@ function openRecognitionTestModal(){
           <summary style="font-size:11.5px; color:var(--ink-muted); cursor:pointer; font-weight:600;">🔍 OCR 원문 전체 보기</summary>
           <pre style="white-space:pre-wrap; font-size:10.5px; color:var(--ink-muted); background:#F7F8FA; padding:10px; border-radius:8px; margin-top:6px; max-height:220px; overflow-y:auto; font-family:'JetBrains Mono',monospace;">${escapeHtml(text || '(인식된 텍스트 없음)')}</pre>
         </details>`;
-      rInput.value = '';
     };
     reader.readAsDataURL(file);
-  });
+  }
+  rCameraInput.addEventListener('change', ()=>{ if(rCameraInput.files.length){ processReceiptTestFile(rCameraInput.files[0]); rCameraInput.value = ''; } });
+  rGalleryInput.addEventListener('change', ()=>{ if(rGalleryInput.files.length){ processReceiptTestFile(rGalleryInput.files[0]); rGalleryInput.value = ''; } });
 }
 
 async function runOldPhotoCompression(){
