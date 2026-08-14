@@ -2033,7 +2033,8 @@ async function openProductCatalogModal(){
 
     <div class="seg" id="pcModeSeg">
       <button type="button" class="seg-btn active st-blocked" data-v="single">개별 등록</button>
-      <button type="button" class="seg-btn st-testing" data-v="bulk">일괄 등록 (엑셀 붙여넣기)</button>
+      <button type="button" class="seg-btn st-testing" data-v="bulk">제품 일괄등록</button>
+      <button type="button" class="seg-btn st-testing" data-v="bulk_barcode">바코드 일괄등록</button>
     </div>
 
     <div id="pcSingleArea">
@@ -2059,6 +2060,17 @@ async function openProductCatalogModal(){
       </div>
     </div>
 
+    <div id="pcBulkBarcodeArea" style="display:none;">
+      <div class="field">
+        <label>바코드끝6자리 · 제품코드 · 제품명 · 단위(박스/낱개, 선택) (탭 또는 쉼표 구분, 한 줄에 하나씩)</label>
+        <textarea id="pcbb_bulkBox" style="min-height:140px; font-family:'JetBrains Mono',monospace; font-size:12.5px;" placeholder="097042	F00005444	AV-Set ONLINEplus 5008-R	박스
+097043	F00005444	AV-Set ONLINEplus 5008-R	낱개"></textarea>
+        <div class="hint">엑셀에서 최대 4개 컬럼(바코드끝6자리·제품코드·제품명·단위)을 그대로 드래그해서 복사·붙여넣기 하면 돼요. 마스터에 없던 제품코드는 제품마스터에도 자동 등록돼요.</div>
+      </div>
+      <div class="err" id="pcbb_err">최소 1줄 이상, 바코드끝6자리·제품코드는 필수예요</div>
+      <button class="btn-submit" id="pcbb_bulkAddBtn" style="width:100%;">일괄 등록</button>
+    </div>
+
     <div class="loading" id="pc_loading" style="padding:24px 0;">불러오는 중...</div>
     <div id="pc_list" style="display:none; margin-top:14px;"></div>
     <div class="modal-actions">
@@ -2078,7 +2090,45 @@ async function openProductCatalogModal(){
       pcMode = btn.dataset.v;
       document.getElementById('pcSingleArea').style.display = pcMode === 'single' ? 'block' : 'none';
       document.getElementById('pcBulkArea').style.display = pcMode === 'bulk' ? 'block' : 'none';
+      document.getElementById('pcBulkBarcodeArea').style.display = pcMode === 'bulk_barcode' ? 'block' : 'none';
     });
+  });
+
+  document.getElementById('pcbb_bulkAddBtn').addEventListener('click', async ()=>{
+    const raw = document.getElementById('pcbb_bulkBox').value;
+    const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const parsed = lines.map(line => {
+      const cols = line.split('\t').length > 1 ? line.split('\t') : line.split(',');
+      const key = (cols[0] || '').trim().replace(/\D/g, '').slice(-6);
+      const code = (cols[1] || '').trim();
+      const name = (cols[2] || '').trim();
+      const unit = (cols[3] || '').trim();
+      return { key, code, name, unit, valid: !!key && !!code };
+    });
+    const valid = parsed.filter(p => p.valid);
+    if(valid.length === 0){ document.getElementById('pcbb_err').style.display = 'block'; return; }
+    document.getElementById('pcbb_err').style.display = 'none';
+    const btn2 = document.getElementById('pcbb_bulkAddBtn');
+    btn2.disabled = true; btn2.textContent = `등록 중... (0/${valid.length})`;
+    const existingCatalog = await window.fbListCatalogItems();
+    const catalogCodes = new Set(existingCatalog.map(c => c.code));
+    let successCount = 0;
+    for(let i = 0; i < valid.length; i++){
+      const p = valid[i];
+      const ok = await window.fbSaveProductMaster(p.key, p.code, p.name, p.unit, myName);
+      if(ok){
+        successCount++;
+        if(!catalogCodes.has(p.code) && p.name){ await window.fbSaveCatalogItem(p.code, p.name, myName); catalogCodes.add(p.code); }
+      }
+      btn2.textContent = `등록 중... (${i+1}/${valid.length})`;
+    }
+    btn2.disabled = false; btn2.textContent = '일괄 등록';
+    showToast(`${successCount}/${valid.length}건 일괄 등록 완료${parsed.length - valid.length > 0 ? ` (형식 오류 ${parsed.length - valid.length}건 제외)` : ''}`);
+    document.getElementById('pcbb_bulkBox').value = '';
+    const list = await window.fbListProductMaster();
+    productMasterCrossCache = list;
+    masterListCache = list;
+    loadCatalogList();
   });
 
   document.getElementById('pc_addBtn').addEventListener('click', async ()=>{
@@ -4539,7 +4589,6 @@ function openMasterMenuModal(){
     <div class="master-menu-list">
       <button class="master-menu-item" id="mm_partner"><span class="mm-icon">🏢</span><span class="mm-text"><b>파트너</b><small>반품처 코드 · 이름 관리</small></span></button>
       <button class="master-menu-item" id="mm_catalog"><span class="mm-icon">📦</span><span class="mm-text"><b>제품마스터</b><small>제품코드 · 제품명 + 연결된 바코드까지 한 화면에서 관리</small></span></button>
-      <button class="master-menu-item" id="mm_barcode"><span class="mm-icon">🗂</span><span class="mm-text"><b>바코드 일괄등록</b><small>여러 건 한번에 붙여넣기 등록 (개별 관리는 제품마스터에서)</small></span></button>
       <button class="master-menu-item" id="mm_blockbatch"><span class="mm-icon">🚫</span><span class="mm-text"><b>블락배치</b><small>블락배치 제품코드·LOT 등록 - 검수 시 자동 인식</small></span></button>
       <button class="master-menu-item" id="mm_repair"><span class="mm-icon">🧹</span><span class="mm-text"><b>배송처코드 일괄 정리</b><small>코드가 비어있는 예전 기록을 파트너마스터로 자동 보정</small></span></button>
       <button class="master-menu-item" id="mm_logs"><span class="mm-icon">🕘</span><span class="mm-text"><b>정리 이력 보기</b><small>누가 언제 무슨 일괄정리를 실행했는지 확인</small></span></button>
@@ -4552,7 +4601,6 @@ function openMasterMenuModal(){
   overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('masterMenuOverlay'); });
   document.getElementById('mm_partner').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openPartnerModal(); });
   document.getElementById('mm_catalog').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openProductCatalogModal(); });
-  document.getElementById('mm_barcode').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openMasterModal(); });
   document.getElementById('mm_blockbatch').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openBlockBatchModal(); });
   document.getElementById('mm_repair').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); runPartnerCodeRepair(); });
   document.getElementById('mm_logs').addEventListener('click', ()=>{ closeOverlay('masterMenuOverlay'); openMaintenanceLogModal(); });
@@ -4579,7 +4627,7 @@ function openRecognitionTestModal(){
     <div id="rtProductArea">
       <div class="hint" style="margin-bottom:10px;">바코드 막대, 밑에 찍힌 (01)(10)(17) 코드, "LOT"/"유효기간" 같은 라벨 글자까지 사진 한 장에서 한번에 시도해요.</div>
       <div class="capture-zone" id="rtProductZone">
-        📷 눌러서 촬영 또는 앨범에서 선택
+        🖼 눌러서 사진 선택
         <input type="file" id="rtProductInput" accept="image/*">
       </div>
       <div id="rtProductProgress" style="display:none;"><div class="ocr-progress">🔄 분석 중...</div></div>
@@ -4589,7 +4637,7 @@ function openRecognitionTestModal(){
     <div id="rtReceiptArea" style="display:none;">
       <div class="hint" style="margin-bottom:10px;">인수증 전체 또는 반품번호 부분만 확대해서 올려도 돼요.</div>
       <div class="capture-zone" id="rtReceiptZone">
-        📷 눌러서 촬영 또는 앨범에서 선택
+        🖼 눌러서 사진 선택
         <input type="file" id="rtReceiptInput" accept="image/*">
       </div>
       <div id="rtReceiptProgress" style="display:none;"><div class="ocr-progress">🔄 분석 중...</div></div>
