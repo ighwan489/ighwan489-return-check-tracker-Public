@@ -648,8 +648,9 @@ function recordReceivingLabel(rec){
     const v = itemVerifiedQty(it);
     const e = parseFloat(it.expectedQuantity) || 0;
     if(v > 0) anyVerified = true;
-    // 예정외 품목(expectedQuantity 기본값 0)은 최소 1개는 확인해야 충족, 일반품목은 수정된 0(=예정없음)도 충족으로 인정
-    const itemDone = it.isUnexpected ? v > 0 : v >= e;
+    // 이제 예정외 품목도 추가 시 실제 수량을 입력받으므로 보통은 일반품목과 동일 기준.
+    // 옛날 방식(수량 0으로 등록된 레거시)만 최소 1개 확인 기준으로 예외처리
+    const itemDone = (it.isUnexpected && e === 0) ? v > 0 : v >= e;
     if(!itemDone) allComplete = false;
   });
   if(allComplete) return { label: '입고완료', color: 'var(--green)', bg: 'var(--green-bg)' };
@@ -709,7 +710,7 @@ function render(){
             if(isExcelItem(it)){
               const verified = itemVerifiedQty(it);
               const expected = parseFloat(it.expectedQuantity) || 0;
-              const complete = it.isUnexpected ? verified > 0 : verified >= expected; // 예정외 품목(expectedQuantity 기본값 0)은 최소 1개는 확인해야 완료로 인정, 일반품목은 수정된 0도 인정
+              const complete = (it.isUnexpected && expected === 0) ? verified > 0 : verified >= expected; // 이제 예정외 품목도 추가 시 실제 수량을 입력받으므로 보통은 일반품목과 동일 기준. 옛날 방식(수량 0으로 등록된 레거시)만 최소 1개 확인 기준으로 예외처리
               const lotCount = Array.isArray(it.lots) ? it.lots.length : 0;
               return `<div class="item-chip"><span class="ic-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')}${complete ? ' <span style="color:var(--green); font-weight:700;">✓완료</span>' : ''}</span><span class="ic-lot">${escapeHtml(it.productCode || '')} · ${verified}/${expected}개 · LOT ${lotCount}건</span></div>`;
             }
@@ -1022,7 +1023,7 @@ function renderEditRecordItemsList(recordId){
     if(isExcelItem(it)){
       const verified = itemVerifiedQty(it);
       const expected = parseFloat(it.expectedQuantity) || 0;
-      const complete = it.isUnexpected ? verified > 0 : verified >= expected; // 예정외 품목(expectedQuantity 기본값 0)은 최소 1개는 확인해야 완료로 인정, 일반품목은 수정된 0도 인정
+      const complete = (it.isUnexpected && expected === 0) ? verified > 0 : verified >= expected; // 이제 예정외 품목도 추가 시 실제 수량을 입력받으므로 보통은 일반품목과 동일 기준. 옛날 방식(수량 0으로 등록된 레거시)만 최소 1개 확인 기준으로 예외처리
       return `
       <div class="item-card">
         <div class="item-card-top">
@@ -1181,7 +1182,7 @@ async function openDetail(id){
     if(isExcelItem(it)){
       const verified = itemVerifiedQty(it);
       const expected = parseFloat(it.expectedQuantity) || 0;
-      const complete = it.isUnexpected ? verified > 0 : verified >= expected; // 예정외 품목(expectedQuantity 기본값 0)은 최소 1개는 확인해야 완료로 인정, 일반품목은 수정된 0도 인정
+      const complete = (it.isUnexpected && expected === 0) ? verified > 0 : verified >= expected; // 이제 예정외 품목도 추가 시 실제 수량을 입력받으므로 보통은 일반품목과 동일 기준. 옛날 방식(수량 0으로 등록된 레거시)만 최소 1개 확인 기준으로 예외처리
       const lots = Array.isArray(it.lots) ? it.lots : [];
       html += `<div class="item-section-title" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px;">
         <span>📦 ${escapeHtml(it.productName || it.productCode || '제품명 미입력')} <span style="font-size:10.5px; color:var(--ink-muted);">(${escapeHtml(it.productCode)})</span> ${complete ? '<span style="color:var(--green); font-weight:700;">✅ 완료</span>' : `<span style="color:var(--steel); font-weight:700;">예정 ${expected} / 확인 ${verified}</span>`}</span>
@@ -3615,7 +3616,12 @@ async function openInspectModal(recordId){
       // [정책변경] 수량이 덜 찬 상태에서 "그래도 완료"로 우회하던 걸 없앰. 실물이 없는 품목은
       // "📦 실물없음" 버튼으로 정식 등록(LOT=XXXXX·상태D·사유 남김)해야 수량이 채워짐 - 조용한 우회가 아니라
       // 반드시 기록이 남는 방식으로만 완료 가능하게 함.
-      const incomplete = its.filter(it => isExcelItem(it) && (it.isUnexpected ? itemVerifiedQty(it) === 0 : itemVerifiedQty(it) < (parseFloat(it.expectedQuantity)||0)));
+      const incomplete = its.filter(it => {
+        if(!isExcelItem(it)) return false;
+        const v = itemVerifiedQty(it);
+        const e = parseFloat(it.expectedQuantity) || 0;
+        return (it.isUnexpected && e === 0) ? v === 0 : v < e;
+      });
       if(incomplete.length > 0){
         const names = incomplete.map(it => it.productName || it.productCode).join(', ');
         showToast(`아직 수량이 덜 채워진 품목이 있어요: ${names} (실물없음 버튼으로 사유를 남기고 채워주세요)`);
@@ -3649,7 +3655,7 @@ function renderInspectItemsList(recordId){
     if(isExcelItem(it)){
       const verified = itemVerifiedQty(it);
       const expected = parseFloat(it.expectedQuantity) || 0;
-      const complete = it.isUnexpected ? verified > 0 : verified >= expected; // 예정외 품목(expectedQuantity 기본값 0)은 최소 1개는 확인해야 완료로 인정, 일반품목은 수정된 0도 인정
+      const complete = (it.isUnexpected && expected === 0) ? verified > 0 : verified >= expected; // 이제 예정외 품목도 추가 시 실제 수량을 입력받으므로 보통은 일반품목과 동일 기준. 옛날 방식(수량 0으로 등록된 레거시)만 최소 1개 확인 기준으로 예외처리
       const over = expected > 0 && verified > expected; // 예정보다 많이 확인된 경우 - 완료는 그대로 되지만 경고만 표시
       const lots = Array.isArray(it.lots) ? it.lots : [];
       return `<div class="item-card">
@@ -3714,7 +3720,8 @@ function openAddUnexpectedItemModal(recordId){
       <div id="ui_codeSuggest" class="suggest-box" style="display:none;"></div>
     </div>
     <div class="field"><label>제품명</label><input id="ui_name" type="text" autocomplete="off" placeholder="예: AV-Set ONLINEplus 5008-R"></div>
-    <div class="err" id="ui_err">제품코드를 입력해주세요</div>
+    <div class="field"><label>실물 수량 *</label><input id="ui_qty" type="text" autocomplete="off" placeholder="눈으로 확인한 도착 수량"></div>
+    <div class="err" id="ui_err">제품코드와 수량을 입력해주세요</div>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closeOverlay('addUnexpectedItemOverlay')">취소</button>
       <button class="btn-submit" id="ui_addBtn">추가</button>
@@ -3732,11 +3739,14 @@ function openAddUnexpectedItemModal(recordId){
   document.getElementById('ui_addBtn').addEventListener('click', async ()=>{
     const code = codeInput.value.trim();
     const name = nameInput.value.trim();
-    if(!code){ document.getElementById('ui_err').style.display = 'block'; return; }
+    const qty = document.getElementById('ui_qty').value.trim();
+    if(!code || !qty){ document.getElementById('ui_err').style.display = 'block'; return; }
     const rec = records.find(r => r.id === recordId);
     if(!rec) return;
     const its = itemsOf(rec);
-    const newItem = { id: genId(), productCode: code, productName: name, expectedQuantity: 0, lots: [], isUnexpected: true };
+    // 여기서 입력받은 수량을 예정수량으로 그대로 저장 - 이후 "🔍실물검수"에서 LOT을 등록할 때
+    // 일반 예정품목과 똑같은 방식(예정 vs 확인 수량 비교)으로 완료 여부가 판단됨
+    const newItem = { id: genId(), productCode: code, productName: name, expectedQuantity: qty, lots: [], isUnexpected: true };
     its.push(newItem);
     rec.items = its;
     render();
