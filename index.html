@@ -648,7 +648,9 @@ function recordReceivingLabel(rec){
     const v = itemVerifiedQty(it);
     const e = parseFloat(it.expectedQuantity) || 0;
     if(v > 0) anyVerified = true;
-    if(!(e > 0 && v >= e)) allComplete = false;
+    // 예정외 품목(expectedQuantity 기본값 0)은 최소 1개는 확인해야 충족, 일반품목은 수정된 0(=예정없음)도 충족으로 인정
+    const itemDone = it.isUnexpected ? v > 0 : v >= e;
+    if(!itemDone) allComplete = false;
   });
   if(allComplete) return { label: '입고완료', color: 'var(--green)', bg: 'var(--green-bg)' };
   if(anyVerified) return { label: '부분입고', color: 'var(--amber)', bg: 'var(--amber-bg)' };
@@ -707,7 +709,7 @@ function render(){
             if(isExcelItem(it)){
               const verified = itemVerifiedQty(it);
               const expected = parseFloat(it.expectedQuantity) || 0;
-              const complete = expected > 0 && verified >= expected;
+              const complete = it.isUnexpected ? verified > 0 : verified >= expected; // 예정외 품목(expectedQuantity 기본값 0)은 최소 1개는 확인해야 완료로 인정, 일반품목은 수정된 0도 인정
               const lotCount = Array.isArray(it.lots) ? it.lots.length : 0;
               return `<div class="item-chip"><span class="ic-name">${escapeHtml(it.productName || it.productCode || '제품명 미입력')}${complete ? ' <span style="color:var(--green); font-weight:700;">✓완료</span>' : ''}</span><span class="ic-lot">${escapeHtml(it.productCode || '')} · ${verified}/${expected}개 · LOT ${lotCount}건</span></div>`;
             }
@@ -1020,7 +1022,7 @@ function renderEditRecordItemsList(recordId){
     if(isExcelItem(it)){
       const verified = itemVerifiedQty(it);
       const expected = parseFloat(it.expectedQuantity) || 0;
-      const complete = expected > 0 && verified >= expected;
+      const complete = it.isUnexpected ? verified > 0 : verified >= expected; // 예정외 품목(expectedQuantity 기본값 0)은 최소 1개는 확인해야 완료로 인정, 일반품목은 수정된 0도 인정
       return `
       <div class="item-card">
         <div class="item-card-top">
@@ -1058,6 +1060,13 @@ function openConfirmModal(id){
   closeOverlay('confirmOverlay');
   const rec = records.find(r => r.id === id);
   if(!rec) return;
+  // 최종 방어선: 목록/실물검수 버튼이 정상적으로 게이팅해주지만, 혹시 모를 다른 진입 경로로
+  // 여기까지 왔을 때를 대비해 여기서도 한 번 더 확인함 (이중 안전장치)
+  const recvInfo = recordReceivingLabel(rec);
+  if(recvInfo && recvInfo.label !== '입고완료'){
+    showToast('아직 수량이 다 채워지지 않았어요 - 실물검수에서 완료 후 다시 시도해주세요');
+    return;
+  }
   const mismatchCount = itemsOf(rec).reduce((sum, it) => sum + (Array.isArray(it.lots) ? it.lots.filter(l => l.codeMismatch).length : 0), 0);
   const overlay = document.createElement('div');
   overlay.className = 'overlay'; overlay.id = 'confirmOverlay';
@@ -1172,7 +1181,7 @@ async function openDetail(id){
     if(isExcelItem(it)){
       const verified = itemVerifiedQty(it);
       const expected = parseFloat(it.expectedQuantity) || 0;
-      const complete = expected > 0 && verified >= expected;
+      const complete = it.isUnexpected ? verified > 0 : verified >= expected; // 예정외 품목(expectedQuantity 기본값 0)은 최소 1개는 확인해야 완료로 인정, 일반품목은 수정된 0도 인정
       const lots = Array.isArray(it.lots) ? it.lots : [];
       html += `<div class="item-section-title" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px;">
         <span>📦 ${escapeHtml(it.productName || it.productCode || '제품명 미입력')} <span style="font-size:10.5px; color:var(--ink-muted);">(${escapeHtml(it.productCode)})</span> ${complete ? '<span style="color:var(--green); font-weight:700;">✅ 완료</span>' : `<span style="color:var(--steel); font-weight:700;">예정 ${expected} / 확인 ${verified}</span>`}</span>
@@ -3606,7 +3615,7 @@ async function openInspectModal(recordId){
       // [정책변경] 수량이 덜 찬 상태에서 "그래도 완료"로 우회하던 걸 없앰. 실물이 없는 품목은
       // "📦 실물없음" 버튼으로 정식 등록(LOT=XXXXX·상태D·사유 남김)해야 수량이 채워짐 - 조용한 우회가 아니라
       // 반드시 기록이 남는 방식으로만 완료 가능하게 함.
-      const incomplete = its.filter(it => isExcelItem(it) && itemVerifiedQty(it) < (parseFloat(it.expectedQuantity)||0));
+      const incomplete = its.filter(it => isExcelItem(it) && (it.isUnexpected ? itemVerifiedQty(it) === 0 : itemVerifiedQty(it) < (parseFloat(it.expectedQuantity)||0)));
       if(incomplete.length > 0){
         const names = incomplete.map(it => it.productName || it.productCode).join(', ');
         showToast(`아직 수량이 덜 채워진 품목이 있어요: ${names} (실물없음 버튼으로 사유를 남기고 채워주세요)`);
@@ -3640,7 +3649,7 @@ function renderInspectItemsList(recordId){
     if(isExcelItem(it)){
       const verified = itemVerifiedQty(it);
       const expected = parseFloat(it.expectedQuantity) || 0;
-      const complete = expected > 0 && verified >= expected;
+      const complete = it.isUnexpected ? verified > 0 : verified >= expected; // 예정외 품목(expectedQuantity 기본값 0)은 최소 1개는 확인해야 완료로 인정, 일반품목은 수정된 0도 인정
       const over = expected > 0 && verified > expected; // 예정보다 많이 확인된 경우 - 완료는 그대로 되지만 경고만 표시
       const lots = Array.isArray(it.lots) ? it.lots : [];
       return `<div class="item-card">
