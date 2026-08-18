@@ -2915,7 +2915,7 @@ async function openPartnerModal(){
   document.getElementById('pmParseBtn').addEventListener('click', ()=>{
     const text = document.getElementById('pmPasteBox').value;
     partnerBulkRows = parsePartnerText(text);
-    renderPartnerPreview();
+    renderPartnerBulkPreview();
     document.getElementById('pmBulkPreviewWrap').style.display = 'block';
   });
 
@@ -2955,7 +2955,7 @@ function parsePartnerText(text){
   });
 }
 
-function renderPartnerPreview(){
+function renderPartnerBulkPreview(){
   const validCount = partnerBulkRows.filter(r => r.valid).length;
   document.getElementById('pmPreviewSummary').innerHTML =
     `총 <b>${partnerBulkRows.length}</b>행 인식 · 유효 <b>${validCount}</b>건${partnerBulkRows.length - validCount > 0 ? ` · 코드/이름 누락 ${partnerBulkRows.length - validCount}건은 제외됐어요` : ''}`;
@@ -3084,8 +3084,14 @@ function resolvePartnerCodeFromInput(value, selectedCode){
     if(match && v === `${match.code} ${match.name}`) return selectedCode;
   }
   const firstToken = v.split(/\s+/)[0];
-  const hit = (partnerMasterCache || []).find(p => p.code === firstToken);
-  return hit ? hit.code : '';
+  const codeHit = (partnerMasterCache || []).find(p => p.code === firstToken);
+  if(codeHit) return codeHit.code;
+  // [개선] "코드 이름" 형식으로 검색해서 선택해야만 인식되던 걸, 이름만 정확히 타이핑해도
+  // 마스터에 그 이름을 가진 파트너가 1명뿐이면 자동으로 코드를 찾아주도록 함.
+  // 동명이인이 여럿이면 자동으로 정할 수 없으니 그때만 검색해서 선택하라고 안내함.
+  const nameMatches = (partnerMasterCache || []).filter(p => (p.name || '').trim() === v);
+  if(nameMatches.length === 1) return nameMatches[0].code;
+  return '';
 }
 
 // 기록에 partnerCode가 이미 있으면 그대로 쓰고, 없으면(코드 필드가 비어있던 예전 기록) hospitalName에 남아있는
@@ -3117,7 +3123,12 @@ function renderPartnerPreview(elId, value, selectedCode){
     el.innerHTML = `✅ 배송처코드 <b>${escapeHtml(code)}</b> 확인됨${match ? ' · ' + escapeHtml(match.name) : ''}`;
     el.className = 'partner-preview ok';
   } else {
-    el.innerHTML = `⚠ 파트너마스터에 없는 이름이에요 - 코드 없이 저장돼요 (검색해서 선택해주세요)`;
+    const nameMatches = (partnerMasterCache || []).filter(p => (p.name || '').trim() === v);
+    if(nameMatches.length > 1){
+      el.innerHTML = `⚠ 같은 이름의 파트너가 ${nameMatches.length}명 있어요(${nameMatches.map(p=>escapeHtml(p.code)).join(', ')}) - 검색해서 정확히 선택해주세요`;
+    } else {
+      el.innerHTML = `⚠ 파트너마스터에 없는 이름이에요 - 코드 없이 저장돼요 (검색해서 선택해주세요)`;
+    }
     el.className = 'partner-preview warn';
   }
 }
