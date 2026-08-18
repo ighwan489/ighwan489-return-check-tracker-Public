@@ -1708,8 +1708,10 @@ function quaggaDecodeOnce(src, quaggaSize){
   });
 }
 
-// 흑백 변환 + 히스토그램 스트레칭(대비 강화). 조명이 흐리거나 반사광이 있는 라벨 사진에서
+// 흑백 변환 + 퍼센타일 기반 대비 보정. 조명이 흐리거나 반사광이 있는 라벨 사진에서
 // 바코드 흑/백 경계가 흐릿하게 찍힌 경우 이 전처리를 거치면 디코딩 성공률이 올라감.
+// (기존엔 단순 min/max로 늘렸는데, 사진 구석에 그림자나 반사광 하나만 있어도 그쪽에 쏠려서
+// 전체 보정이 틀어지는 문제가 있었음 → 상하위 2%는 버리고 나머지 구간으로 늘리는 방식으로 교체)
 function enhanceContrastDataUrl(dataUrl, maxSize){
   return new Promise((resolve, reject)=>{
     const img = new Image();
@@ -1727,16 +1729,18 @@ function enhanceContrastDataUrl(dataUrl, maxSize){
       try{
         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const d = imgData.data;
-        let min = 255, max = 0;
+        const hist = new Array(256).fill(0);
+        let total = 0;
+        const grayOf = i => 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+        for(let i = 0; i < d.length; i += 4){ hist[Math.round(grayOf(i))]++; total++; }
+        const cut = total * 0.02;
+        let cum = 0, lo = 0;
+        for(let v = 0; v < 256; v++){ cum += hist[v]; if(cum >= cut){ lo = v; break; } }
+        cum = 0; let hi = 255;
+        for(let v = 255; v >= 0; v--){ cum += hist[v]; if(cum >= cut){ hi = v; break; } }
+        const range = Math.max(1, hi - lo);
         for(let i = 0; i < d.length; i += 4){
-          const gray = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-          if(gray < min) min = gray;
-          if(gray > max) max = gray;
-        }
-        const range = Math.max(1, max - min);
-        for(let i = 0; i < d.length; i += 4){
-          const gray = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-          const stretched = Math.max(0, Math.min(255, ((gray - min) / range) * 255));
+          const stretched = Math.max(0, Math.min(255, ((grayOf(i) - lo) / range) * 255));
           d[i] = d[i+1] = d[i+2] = stretched;
         }
         ctx.putImageData(imgData, 0, 0);
@@ -1749,9 +1753,11 @@ function enhanceContrastDataUrl(dataUrl, maxSize){
 }
 
 // 기존엔 1000px 고정 크기 × 4방향만 시도했음(총 4회). 바코드가 사진에 너무 작게(멀리서 촬영) 또는
-// 너무 크게(가까이서 촬영) 찍힌 경우 실패가 잦았음 → 크기를 3단계로 늘리고, 그래도 실패하면
-// 대비보정(흐림/반사광 대응) 버전까지 순차 시도. 가장 흔한 케이스(정방향, 표준크기)를 맨 먼저 시도해서
-// 대부분의 경우엔 기존과 동일한 속도로 끝나고, 실패할 때만 추가 시도로 넘어감.
+// 너무 크게(가까이서 촬영) 찍힌 경우 실패가 잦아서 크기 단계를 늘림.
+// [수정] 처음엔 700/1000/1400 3단계 × 여러 방향(최대 7회) + 대비보정 2회까지 시도했는데,
+// quaggaDecodeOnce에 크기를 안 넘겨서 Quagga 내부 분석 해상도가 항상 900으로 고정되는 바람에
+// 크기를 바꿔봤자 차이가 거의 없었던 버그가 있었음. 크기별로 실제 다른 해상도로 분석하도록
+// 수정하고, 대신 시도 횟수는 6회+대비보정 1회로 줄여서 실패 시 응답이 너무 느려지지 않게 함.
 async function decodeBarcodeFromImage(dataUrl){
   if(!window.Quagga) return null;
   const attempts = [
@@ -1760,24 +1766,22 @@ async function decodeBarcodeFromImage(dataUrl){
     { angle: 270, size: 1000 },
     { angle: 180, size: 1000 },
     { angle: 0, size: 1400 },   // 바코드가 작게(멀리서) 찍힌 경우
-    { angle: 90, size: 1400 },
-    { angle: 0, size: 700 },    // 바코드가 크게(가까이서, 흔들림) 찍힌 경우
+    { angle: 0, size: 700 },    // 바코드가 크게(가까이서) 찍힌 경우
   ];
   for(const a of attempts){
     try{
       const src = await rotateAndResizeDataUrl(dataUrl, a.angle, a.size);
-      const code = await quaggaDecodeOnce(src);
+      // Quagga 내부 분석 해상도를 만든 이미지 크기와 맞춰줘야 함 - 여기서 다시 900으로 깎아버리면
+      // 1400px로 크게 만든 의미(작게 찍힌 바코드를 더 세밀하게 분석)가 없어짐
+      const code = await quaggaDecodeOnce(src, a.size);
       if(code) return code;
     }catch(e){ console.warn(`바코드 ${a.angle}도/${a.size}px 시도 실패:`, e); }
   }
-  // 여기까지 다 실패했으면 흐림/저조도/반사광 가능성 → 대비 보정 버전으로 재시도
+  // 여기까지 다 실패했으면 흐림/저조도/반사광 가능성 → 대비 보정 버전으로 한 번 더 시도
   try{
     const enhanced = await enhanceContrastDataUrl(dataUrl, 1000);
-    const code = await quaggaDecodeOnce(enhanced);
+    const code = await quaggaDecodeOnce(enhanced, 900);
     if(code) return code;
-    const enhanced90 = await rotateAndResizeDataUrl(enhanced, 90, 1200);
-    const code90 = await quaggaDecodeOnce(enhanced90);
-    if(code90) return code90;
   }catch(e){ console.warn('대비 보정 디코딩 시도 실패:', e); }
   return null;
 }
