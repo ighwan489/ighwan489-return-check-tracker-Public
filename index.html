@@ -1752,21 +1752,18 @@ function enhanceContrastDataUrl(dataUrl, maxSize){
   });
 }
 
-// 기존엔 1000px 고정 크기 × 4방향만 시도했음(총 4회). 바코드가 사진에 너무 작게(멀리서 촬영) 또는
-// 너무 크게(가까이서 촬영) 찍힌 경우 실패가 잦아서 크기 단계를 늘림.
-// [수정] 처음엔 700/1000/1400 3단계 × 여러 방향(최대 7회) + 대비보정 2회까지 시도했는데,
-// quaggaDecodeOnce에 크기를 안 넘겨서 Quagga 내부 분석 해상도가 항상 900으로 고정되는 바람에
-// 크기를 바꿔봤자 차이가 거의 없었던 버그가 있었음. 크기별로 실제 다른 해상도로 분석하도록
-// 수정하고, 대신 시도 횟수는 6회+대비보정 1회로 줄여서 실패 시 응답이 너무 느려지지 않게 함.
+// [2026-08 실측 반영] 실제 반품 라벨 사진들을 테스트해보니, 사진 프레임 전체에서 바코드가 차지하는
+// 비율이 10% 안팎으로 작은 경우가 많았음. 기존 기본크기 1000px로 사진 "전체"를 리사이즈하면 바코드
+// 막대 하나하나의 실제 픽셀폭이 너무 얇아져서 실패가 잦았음 → 기본크기를 1300px로 올리고,
+// 시도 조합은 정확도 대비 속도를 고려해 5개로 정리함(기존 6개+대비보정1개에서 축소).
 async function decodeBarcodeFromImage(dataUrl){
   if(!window.Quagga) return null;
   const attempts = [
-    { angle: 0, size: 1000 },
-    { angle: 90, size: 1000 },
-    { angle: 270, size: 1000 },
-    { angle: 180, size: 1000 },
-    { angle: 0, size: 1400 },   // 바코드가 작게(멀리서) 찍힌 경우
-    { angle: 0, size: 700 },    // 바코드가 크게(가까이서) 찍힌 경우
+    { angle: 0, size: 1300 },
+    { angle: 90, size: 1300 },
+    { angle: 270, size: 1300 },
+    { angle: 180, size: 1300 },
+    { angle: 0, size: 900 },   // 반대로 너무 가까이서(바코드가 큼) 찍힌 경우
   ];
   for(const a of attempts){
     try{
@@ -1779,7 +1776,7 @@ async function decodeBarcodeFromImage(dataUrl){
   }
   // 여기까지 다 실패했으면 흐림/저조도/반사광 가능성 → 대비 보정 버전으로 한 번 더 시도
   try{
-    const enhanced = await enhanceContrastDataUrl(dataUrl, 1000);
+    const enhanced = await enhanceContrastDataUrl(dataUrl, 1300);
     const code = await quaggaDecodeOnce(enhanced, 900);
     if(code) return code;
   }catch(e){ console.warn('대비 보정 디코딩 시도 실패:', e); }
@@ -4943,11 +4940,14 @@ function openRecognitionTestModal(){
 
       progEl.style.display = 'none';
       resEl.style.display = 'block';
+      const cropRetryId = `rtCropRetryBtn_${Date.now()}`;
       resEl.innerHTML = `
         <div style="font-size:12.5px; font-weight:700; color:var(--steel-dark); margin:10px 0 6px;">① 바코드 그래픽 디코딩</div>
         ${barcodeRaw
           ? `<div class="memo">원시값: <code>${escapeHtml(barcodeRaw)}</code><br>GTIN: <b>${escapeHtml(gs1FromBarcode.gtin || '(없음)')}</b> · LOT: <b>${escapeHtml(gs1FromBarcode.lot || '(없음)')}</b> · 유효기간: <b>${escapeHtml(gs1FromBarcode.expiryDate || '(없음)')}</b></div>`
-          : `<div class="memo" style="color:var(--danger);">❌ 바코드 막대 인식 실패 - 여백을 두고 정면에서 다시 찍어보세요</div>`}
+          : `<div class="memo" style="color:var(--danger);">❌ 바코드 막대 인식 실패 - 여백을 두고 정면에서 다시 찍어보세요
+              <button type="button" id="${cropRetryId}" style="display:block; width:100%; margin-top:8px; padding:8px; border-radius:7px; border:1px dashed var(--danger); background:#fff; color:var(--danger); font-weight:700; font-size:11.5px; cursor:pointer;">✂️ 바코드 부분만 잘라서 재시도</button>
+            </div>`}
 
         <div style="font-size:12.5px; font-weight:700; color:var(--steel-dark); margin:10px 0 6px;">② 텍스트에서 (01)(10)(17) GS1코드 찾기</div>
         <div class="memo">GTIN: <b>${escapeHtml(gs1FromText.gtin || '(없음)')}</b> · LOT: <b>${escapeHtml(gs1FromText.lot || '(없음)')}</b> · 유효기간: <b>${escapeHtml(gs1FromText.expiryDate || '(없음)')}</b></div>
@@ -4961,6 +4961,21 @@ function openRecognitionTestModal(){
           <summary style="font-size:11.5px; color:var(--ink-muted); cursor:pointer; font-weight:600;">🔍 OCR 원문 전체 보기</summary>
           <pre style="white-space:pre-wrap; font-size:10.5px; color:var(--ink-muted); background:#F7F8FA; padding:10px; border-radius:8px; margin-top:6px; max-height:220px; overflow-y:auto; font-family:'JetBrains Mono',monospace;">${escapeHtml(ocrText || '(인식된 텍스트 없음)')}</pre>
         </details>`;
+      if(!barcodeRaw){
+        const cropBtn = document.getElementById(cropRetryId);
+        if(cropBtn){
+          cropBtn.addEventListener('click', ()=>{
+            openBarcodeCropRetry(dataUrl, (croppedCode)=>{
+              const gs1FromCrop = parseGs1Raw(croppedCode);
+              const barcodeBlock = resEl.querySelector('div');
+              if(barcodeBlock){
+                barcodeBlock.outerHTML = `<div class="memo" style="color:var(--green);">✅ 크롭 재인식 성공 · 원시값: <code>${escapeHtml(croppedCode)}</code><br>GTIN: <b>${escapeHtml(gs1FromCrop.gtin || '(없음)')}</b> · LOT: <b>${escapeHtml(gs1FromCrop.lot || '(없음)')}</b> · 유효기간: <b>${escapeHtml(gs1FromCrop.expiryDate || '(없음)')}</b></div>`;
+              }
+              showToast('바코드 재인식 성공!');
+            });
+          });
+        }
+      }
     };
     reader.readAsDataURL(file);
   }
