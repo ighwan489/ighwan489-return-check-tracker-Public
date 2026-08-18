@@ -640,7 +640,7 @@ function isExcelItem(it){ return it.expectedQuantity !== undefined && it.expecte
 // 예정품목(엑셀등록)이 하나도 없는 건(예정외 등록만 있는 건)은 판정 대상이 아니라 null 반환.
 function recordReceivingLabel(rec){
   const its = itemsOf(rec).filter(isExcelItem);
-  if(its.length === 0) return null;
+  if(its.length === 0) return null; // 예정품목 자체가 없는 건(예정외 등록만 있는 건) - 수량 게이팅 대상 아님
   let anyVerified = false, allComplete = true;
   its.forEach(it => {
     const v = itemVerifiedQty(it);
@@ -650,7 +650,9 @@ function recordReceivingLabel(rec){
   });
   if(allComplete) return { label: '입고완료', color: 'var(--green)', bg: 'var(--green-bg)' };
   if(anyVerified) return { label: '부분입고', color: 'var(--amber)', bg: 'var(--amber-bg)' };
-  return null;
+  // [버그수정] 여기서 null을 반환했더니 "게이팅 대상 아님"과 같은 취급을 받아서, 아직 하나도
+  // 확인 안 된(0/N) 새 건인데도 완료버튼이 활성화되는 문제가 있었음 - 별도 상태로 구분함
+  return { label: '검수전', color: 'var(--ink-muted)', bg: '#F1F3F5' };
 }
 
 function render(){
@@ -683,7 +685,7 @@ function render(){
           <div style="display:flex; align-items:flex-start; min-width:0;">
             ${!isGuestMode ? `<input type="checkbox" class="card-select-chk" ${selectedIds.has(r.id) ? 'checked' : ''} onchange="toggleSelect('${r.id}', this.checked)">` : ''}
             <div style="min-width:0;">
-              <div class="lot">${escapeHtml(r.returnNumber || '(반품번호 미확인)')} ${recvInfo && r.status !== 'confirmed' ? `<span style="font-size:10px; font-weight:700; color:${recvInfo.color}; background:${recvInfo.bg}; padding:2px 7px; border-radius:8px; vertical-align:middle;">${recvInfo.label}</span>` : ''}</div>
+              <div class="lot">${escapeHtml(r.returnNumber || '(반품번호 미확인)')} ${recvInfo && recvInfo.label !== '검수전' && r.status !== 'confirmed' ? `<span style="font-size:10px; font-weight:700; color:${recvInfo.color}; background:${recvInfo.bg}; padding:2px 7px; border-radius:8px; vertical-align:middle;">${recvInfo.label}</span>` : ''}</div>
               <div class="product">${escapeHtml(r.hospitalName || '병원명 미입력')} · 품목 ${its.length}건</div>
             </div>
           </div>
@@ -717,10 +719,10 @@ function render(){
         <div class="photo-badge">🖼 사진 ${(r.photoCount ?? '?')}장</div>
         <div class="card-actions">
           <button class="btn-sm btn-view btn-full-row" onclick="openDetail('${r.id}')">품목·사진 상세 보기</button>
-          ${!isGuestMode && (r.status === 'expected' || r.status === 'pending' || r.status === 'inprogress') ? `<button class="btn-sm" style="background:var(--blue-bg); color:var(--blue); border:1px solid #C7D8FC;" onclick="openInspectModal('${r.id}')">🔍 ${r.status === 'inprogress' ? '검수 이어하기' : '검수시작'}</button>` : ''}
-          ${!isGuestMode ? `<button class="btn-sm btn-edit" onclick="openEditRecordModal('${r.id}')">✏️ 정보 수정</button>` : ''}
-          ${(!isGuestMode && (r.status === 'pending' || r.status === 'inprogress') && recvInfo && recvInfo.label === '입고완료') ? `<button class="btn-sm btn-confirm" onclick="openConfirmModal('${r.id}')">✅ 검수완료 처리</button>` : ''}
-          ${!isGuestMode ? `<button class="btn-sm btn-del" onclick="openDeleteConfirm('${r.id}')">삭제</button>` : ''}
+          ${(!isGuestMode && (r.status === 'pending' || r.status === 'inprogress') && recvInfo && recvInfo.label === '입고완료') ? `<button class="btn-sm btn-confirm btn-full-row" onclick="openConfirmModal('${r.id}')">✅ 검수완료 처리</button>` : ''}
+          ${!isGuestMode && (r.status === 'expected' || r.status === 'pending' || r.status === 'inprogress') ? `<button class="btn-sm" style="flex:1; background:var(--blue-bg); color:var(--blue); border:1px solid #C7D8FC;" onclick="openInspectModal('${r.id}')">🔍 ${r.status === 'inprogress' ? '검수 이어하기' : '검수시작'}</button>` : ''}
+          ${!isGuestMode ? `<button class="btn-sm btn-edit" style="flex:1;" onclick="openEditRecordModal('${r.id}')">✏️ 정보 수정</button>` : ''}
+          ${!isGuestMode ? `<button class="btn-sm btn-del" style="flex:1;" onclick="openDeleteConfirm('${r.id}')">삭제</button>` : ''}
         </div>
       </div>
     </div>`;
