@@ -717,7 +717,7 @@ function render(){
         <div class="photo-badge">🖼 사진 ${(r.photoCount ?? '?')}장</div>
         <div class="card-actions">
           <button class="btn-sm btn-view btn-full-row" onclick="openDetail('${r.id}')">품목·사진 상세 보기</button>
-          ${!isGuestMode && (r.status === 'expected' || r.status === 'pending' || r.status === 'inprogress') ? `<button class="btn-sm" style="background:var(--blue-bg); color:var(--blue); border:1px solid #C7D8FC;" onclick="openInspectModal('${r.id}')">🔍 ${r.status === 'inprogress' ? '검수 이어하기' : '실물검수'}</button>` : ''}
+          ${!isGuestMode && (r.status === 'expected' || r.status === 'pending' || r.status === 'inprogress') ? `<button class="btn-sm" style="background:var(--blue-bg); color:var(--blue); border:1px solid #C7D8FC;" onclick="openInspectModal('${r.id}')">🔍 ${r.status === 'inprogress' ? '검수 이어하기' : '검수시작'}</button>` : ''}
           ${!isGuestMode ? `<button class="btn-sm btn-edit" onclick="openEditRecordModal('${r.id}')">✏️ 정보 수정</button>` : ''}
           ${(!isGuestMode && (r.status === 'pending' || r.status === 'inprogress') && recvInfo && recvInfo.label === '입고완료') ? `<button class="btn-sm btn-confirm" onclick="openConfirmModal('${r.id}')">✅ 검수완료 처리</button>` : ''}
           ${!isGuestMode ? `<button class="btn-sm btn-del" onclick="openDeleteConfirm('${r.id}')">삭제</button>` : ''}
@@ -3526,6 +3526,28 @@ async function openEditExcelItemModal(recordId, itemId){
   });
 }
 
+// 실물검수 모달 상단 배지(부분입고/입고완료)와 하단 완료버튼의 활성/비활성 상태를 매번 다시 계산해서 반영.
+// LOT추가·실물없음등록·삭제 등 품목이 바뀔 때마다(renderInspectItemsList 안에서) 같이 호출돼서 항상 최신 상태를 보여줌.
+function refreshInspectHeader(recordId){
+  const rec = records.find(r => r.id === recordId);
+  const badgeEl = document.getElementById('insp_recvBadge');
+  const btn = document.getElementById('insp_completeBtn');
+  if(!rec){ if(badgeEl) badgeEl.innerHTML = ''; return; }
+  const recvInfo = recordReceivingLabel(rec);
+  if(badgeEl){
+    badgeEl.innerHTML = recvInfo
+      ? `<span style="font-size:11px; font-weight:700; color:${recvInfo.color}; background:${recvInfo.bg}; padding:3px 9px; border-radius:8px;">${recvInfo.label === '입고완료' ? '✅' : '⏳'} ${recvInfo.label}</span>`
+      : '';
+  }
+  if(btn){
+    const ready = !recvInfo || recvInfo.label === '입고완료'; // 예정품목이 없는 건(예정외만 있는 건)은 수량 게이팅 대상이 아님
+    btn.disabled = !ready;
+    btn.style.opacity = ready ? '1' : '.5';
+    btn.style.cursor = ready ? 'pointer' : 'not-allowed';
+    btn.textContent = ready ? '검수완료 처리' : '검수완료 처리 (수량 미완료)';
+  }
+}
+
 async function openInspectModal(recordId){
   closeOverlay('inspectOverlay');
   const rec = records.find(r => r.id === recordId);
@@ -3534,17 +3556,21 @@ async function openInspectModal(recordId){
   overlay.className = 'overlay'; overlay.id = 'inspectOverlay';
   overlay.innerHTML = `<div class="modal">
     <h2>실물 검수 · ${escapeHtml(rec.returnNumber||'')}</h2>
-    <div class="hint" style="margin-bottom:10px;">반품처: ${escapeHtml(rec.hospitalName||'-')}</div>
+    <div class="hint" style="margin-bottom:4px;">반품처: ${escapeHtml(rec.hospitalName||'-')}</div>
+    <div id="insp_recvBadge" style="margin-bottom:10px;"></div>
     <div id="insp_itemsList"></div>
-    <div class="modal-actions">
-      <button class="btn-cancel" style="flex:1;" onclick="closeOverlay('inspectOverlay')">닫기</button>
-      ${!isGuestMode ? `<button class="btn-submit" style="background:var(--blue); flex:1;" id="insp_saveDraftBtn">💾 임시저장</button>` : ''}
-      ${!isGuestMode ? `<button class="btn-submit green" id="insp_completeBtn">검수완료 처리</button>` : ''}
+    <div style="display:flex; flex-direction:column; gap:8px; margin-top:18px;">
+      <div style="display:flex; gap:10px;">
+        <button class="btn-cancel" style="flex:1;" onclick="closeOverlay('inspectOverlay')">닫기</button>
+        ${!isGuestMode ? `<button class="btn-submit" style="background:var(--blue); flex:1; white-space:nowrap;" id="insp_saveDraftBtn">💾 임시저장</button>` : ''}
+      </div>
+      ${!isGuestMode ? `<button class="btn-submit green" id="insp_completeBtn" style="width:100%;">검수완료 처리</button>` : ''}
     </div>
   </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('inspectOverlay'); });
   renderInspectItemsList(recordId);
+  refreshInspectHeader(recordId);
 
   const saveDraftBtn = document.getElementById('insp_saveDraftBtn');
   if(saveDraftBtn){
@@ -3594,7 +3620,7 @@ function renderInspectItemsList(recordId){
   const rec = records.find(r => r.id === recordId);
   if(!rec) return;
   const its = itemsOf(rec);
-  if(its.length === 0){ wrap.innerHTML = `<div class="hint" style="text-align:center; padding:10px 0;">등록된 품목이 없어요</div>`; return; }
+  if(its.length === 0){ wrap.innerHTML = `<div class="hint" style="text-align:center; padding:10px 0;">등록된 품목이 없어요</div>`; refreshInspectHeader(recordId); return; }
   wrap.innerHTML = its.map(it => {
     if(isExcelItem(it)){
       const verified = itemVerifiedQty(it);
@@ -3602,19 +3628,15 @@ function renderInspectItemsList(recordId){
       const complete = expected > 0 && verified >= expected;
       const lots = Array.isArray(it.lots) ? it.lots : [];
       return `<div class="item-card">
-        <div class="item-card-top">
-          <div>
-            <div class="it-name">${escapeHtml(it.productName || it.productCode)} ${complete ? '<span style="color:var(--green); font-weight:700;">✅ 완료</span>' : ''}${it.isUnexpected ? ' <span style="color:var(--amber); font-weight:700; font-size:10.5px;">➕예정외</span>' : ''}</div>
-            <div class="it-lot">${escapeHtml(it.productCode)}</div>
-            <div class="it-meta">예정 ${expected}개 · 확인 ${verified}개${it.reason ? ' · ' + escapeHtml(it.reason) : ''}</div>
-          </div>
-          ${!isGuestMode ? `<div class="it-actions" style="flex-wrap:wrap; row-gap:6px;">
-            <button onclick="openEditExcelItemModal('${recordId}','${it.id}')">수정</button>
-            <button onclick="openAddLotModal('${recordId}','${it.id}')" style="background:var(--steel); color:#fff; border-color:var(--steel); font-weight:700; font-size:12.5px; padding:7px 12px;">🔍 실물검수</button>
-            <button onclick="openNoPhysicalModal('${recordId}','${it.id}')" style="background:#fff; color:var(--danger); border-color:var(--danger); font-weight:600;">📦 실물없음</button>
-            ${it.isUnexpected ? `<button onclick="deleteUnexpectedItem('${recordId}','${it.id}')">삭제</button>` : ''}
-          </div>` : ''}
-        </div>
+        <div class="it-name">${escapeHtml(it.productName || it.productCode)} ${complete ? '<span style="color:var(--green); font-weight:700;">✅ 완료</span>' : ''}${it.isUnexpected ? ' <span style="color:var(--amber); font-weight:700; font-size:10.5px;">➕예정외</span>' : ''}</div>
+        <div class="it-lot">${escapeHtml(it.productCode)}</div>
+        <div class="it-meta">예정 ${expected}개 · 확인 ${verified}개${it.reason ? ' · ' + escapeHtml(it.reason) : ''}</div>
+        ${!isGuestMode ? `<div style="display:flex; gap:6px; margin-top:9px;">
+          <button style="font-size:11px; padding:5px 9px; border-radius:6px; border:1px solid var(--line); background:#fff; cursor:pointer;" onclick="openEditExcelItemModal('${recordId}','${it.id}')">수정</button>
+          <button style="flex:1; background:var(--steel); color:#fff; border:1px solid var(--steel); font-weight:700; font-size:12.5px; padding:7px 10px; border-radius:6px; cursor:pointer;" onclick="openAddLotModal('${recordId}','${it.id}')">🔍 실물검수</button>
+          <button style="font-size:11px; padding:5px 9px; border-radius:6px; border:1px solid var(--danger); background:#fff; color:var(--danger); font-weight:600; cursor:pointer;" onclick="openNoPhysicalModal('${recordId}','${it.id}')">📦 실물없음</button>
+          ${it.isUnexpected ? `<button style="font-size:11px; padding:5px 9px; border-radius:6px; border:1px solid var(--line); background:#fff; cursor:pointer;" onclick="deleteUnexpectedItem('${recordId}','${it.id}')">삭제</button>` : ''}
+        </div>` : ''}
         ${lots.length > 0 ? `<div style="margin-top:8px; display:flex; flex-direction:column; gap:6px;">
           ${lots.map(l => {
             const st = l.status || 'A';
@@ -3646,6 +3668,7 @@ function renderInspectItemsList(recordId){
   if(!isGuestMode){
     wrap.innerHTML += `<button class="btn-cancel" style="width:100%; margin-top:10px;" onclick="openAddUnexpectedItemModal('${recordId}')">➕ 예정에 없는 품목 추가</button>`;
   }
+  refreshInspectHeader(recordId);
 }
 
 // 반품처가 원래 등록 안 된 제품을 보내온 경우 - 실물검수 중 바로 새 품목으로 추가할 수 있게 함
@@ -4814,6 +4837,7 @@ async function exportToCompanyFormat(){
         const mismatch = l.codeMismatch;
         const block = l.blockBatch;
         const noteParts = [];
+        if(l.memo) noteParts.push(l.memo);
         if(mismatch) noteParts.push(`${mismatch.expectedCode}에서 ${mismatch.scannedCode}로 변경됨`);
         if(block) noteParts.push(block.memo && block.memo.trim() ? block.memo.trim() : '블락배치');
         rows.push({
