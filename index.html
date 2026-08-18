@@ -18,6 +18,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.0.4/tesseract.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getFirestore, collection, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs, addDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -505,6 +506,7 @@
     <div class="fab-item"><span class="fab-label">엑셀로 반품 예정등록</span><button class="i-green" id="openExcelImport" title="엑셀로 반품 예정등록">📥</button></div>
     <div class="fab-item"><span class="fab-label">반품레포트 양식 다운로드</span><button class="i-steel" id="exportCompanyExcel" title="반품레포트 양식 엑셀 다운로드">🏭</button></div>
     <div class="fab-item"><span class="fab-label">전체 목록 엑셀 다운로드</span><button class="i-blue" id="exportExcel" title="현재 목록 엑셀 다운로드">⬇</button></div>
+    <div class="fab-item"><span class="fab-label">사진 백업 다운로드 (zip)</span><button style="background:var(--steel-dark);" id="exportPhotoBackup" title="반품번호·반품처·제품별로 사진 묶어서 다운로드">🗂️</button></div>
   </div>
   <button class="fab-toggle" id="fabToggleBtn" title="메뉴 열기">+</button>
 </div></div>
@@ -3628,11 +3630,16 @@ function renderInspectItemsList(recordId){
       const verified = itemVerifiedQty(it);
       const expected = parseFloat(it.expectedQuantity) || 0;
       const complete = expected > 0 && verified >= expected;
+      const over = expected > 0 && verified > expected; // 예정보다 많이 확인된 경우 - 완료는 그대로 되지만 경고만 표시
       const lots = Array.isArray(it.lots) ? it.lots : [];
       return `<div class="item-card">
         <div class="it-name">${escapeHtml(it.productName || it.productCode)} ${complete ? '<span style="color:var(--green); font-weight:700;">✅ 완료</span>' : ''}${it.isUnexpected ? ' <span style="color:var(--amber); font-weight:700; font-size:10.5px;">➕예정외</span>' : ''}</div>
         <div class="it-lot">${escapeHtml(it.productCode)}</div>
         <div class="it-meta">예정 ${expected}개 · 확인 ${verified}개${it.reason ? ' · ' + escapeHtml(it.reason) : ''}</div>
+        ${over ? `<div style="font-size:11.5px; font-weight:700; color:var(--amber); background:var(--amber-bg); padding:6px 10px; border-radius:8px; margin-top:6px; display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+          <span>⚠️ 예정수량보다 ${verified - expected}개 더 많아요 - 반품정보 수정이 필요할 수도 있어요</span>
+          <button style="font-size:10.5px; font-weight:700; padding:4px 9px; border-radius:6px; border:1px solid var(--amber); background:#fff; color:var(--amber); cursor:pointer; white-space:nowrap;" onclick="openEditExcelItemModal('${recordId}','${it.id}')">예정수량 수정</button>
+        </div>` : ''}
         ${!isGuestMode ? `<div style="display:flex; gap:6px; margin-top:9px;">
           <button style="font-size:11px; padding:5px 9px; border-radius:6px; border:1px solid var(--line); background:#fff; cursor:pointer;" onclick="openEditExcelItemModal('${recordId}','${it.id}')">수정</button>
           <button style="flex:1; background:var(--steel); color:#fff; border:1px solid var(--steel); font-weight:700; font-size:12.5px; padding:7px 10px; border-radius:6px; cursor:pointer;" onclick="openAddLotModal('${recordId}','${it.id}')">🔍 실물검수</button>
@@ -4896,6 +4903,86 @@ async function exportToCompanyFormat(){
   showToast(`${rows.length}건 반품레포트 양식으로 다운로드 완료`);
 }
 
+// ===================== 사진 백업 다운로드 (zip) ===================== //
+// 사이트(Firestore)에 사진이 계속 쌓이기만 하는 한계가 있어서, 반품번호_반품처 폴더 > 제품별 폴더
+// 구조로 사진을 묶어 로컬에 백업할 수 있게 함. 체크박스로 선택한 게 있으면 선택 건만, 없으면
+// 현재 필터·검색 상태의 전체 목록을 대상으로 함.
+function sanitizeFileName(name){
+  return String(name || '').replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 60) || '이름없음';
+}
+
+async function exportPhotoBackupZip(){
+  const list = selectedIds.size > 0 ? records.filter(r => selectedIds.has(r.id)) : getFiltered();
+  if(list.length === 0){ showToast('다운로드할 항목이 없어요'); return; }
+  if(!window.JSZip){ showToast('zip 라이브러리를 불러오지 못했어요 - 새로고침 후 다시 시도해주세요'); return; }
+
+  const totalPhotoCount = list.reduce((s, r) => s + (r.photoCount || 0), 0);
+  if(totalPhotoCount === 0){ showToast('선택된 건들에 사진이 없어요'); return; }
+
+  showToast(`사진 백업 준비 중... (0/${list.length}건)`);
+  const zip = new JSZip();
+  let doneRecords = 0;
+  let totalPhotos = 0;
+
+  for(const rec of list){
+    const photos = await window.fbGetPhotos(rec.id);
+    doneRecords++;
+    if(photos.length === 0) continue;
+    const its = itemsOf(rec);
+    const folderName = sanitizeFileName(`${rec.returnNumber || '반품번호미확인'}_${rec.hospitalName || ''}`);
+    const folder = zip.folder(folderName);
+    // 같은 파일명이 겹치지 않도록 폴더별 카운터 사용
+    const nameCounters = {};
+    photos.forEach(p => {
+      if(!p.data || typeof p.data !== 'string' || !p.data.includes(',')) return;
+      const base64 = p.data.split(',')[1];
+      const ext = p.data.includes('image/png') ? 'png' : 'jpg';
+      let targetFolder = folder;
+      let pathKey = folderName;
+      let baseName;
+      if(p.type === 'receipt'){
+        baseName = '인수증';
+      } else if(p.itemId){
+        const it = its.find(x => x.id === p.itemId);
+        const subName = sanitizeFileName(it ? `${it.productCode || ''}_${it.productName || ''}` : '품목미상');
+        targetFolder = folder.folder(subName);
+        pathKey = folderName + '/' + subName;
+        const lotVal = it && Array.isArray(it.lots) ? (it.lots.find(l => l.id === p.lotId)?.lot) : null;
+        baseName = lotVal ? sanitizeFileName(lotVal) : '실물사진';
+      } else {
+        baseName = '기타사진';
+      }
+      const key = `${pathKey}::${baseName}`;
+      nameCounters[key] = (nameCounters[key] || 0) + 1;
+      const fileName = `${baseName}_${nameCounters[key]}.${ext}`;
+      targetFolder.file(fileName, base64, { base64: true });
+      totalPhotos++;
+    });
+    if(doneRecords % 5 === 0 || doneRecords === list.length){
+      showToast(`사진 백업 준비 중... (${doneRecords}/${list.length}건)`);
+    }
+  }
+
+  if(totalPhotos === 0){ showToast('내려받을 사진이 없어요'); return; }
+
+  showToast('zip 압축 중... 사진이 많으면 시간이 좀 걸려요');
+  try{
+    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+    const now = new Date();
+    const pad = n => String(n).padStart(2,'0');
+    const filename = `반품사진백업_${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.zip`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=> URL.revokeObjectURL(url), 30000);
+    showToast(`사진 ${totalPhotos}장(${list.length}건) zip 다운로드 완료`);
+  }catch(e){
+    console.error('zip 생성 실패:', e);
+    showToast('zip 만들다가 실패했어요 - 사진이 너무 많으면 검색으로 건수를 줄여서 다시 시도해보세요');
+  }
+}
+
 // ===================== 초기화 / 로그인 ===================== //
 
 function applyGuestModeUI(){
@@ -5506,6 +5593,7 @@ document.getElementById('openStartInspect').addEventListener('click', openStartI
 document.getElementById('openExcelImport').addEventListener('click', openExcelImportModal);
 document.getElementById('exportExcel').addEventListener('click', exportToExcel);
 document.getElementById('exportCompanyExcel').addEventListener('click', exportToCompanyFormat);
+document.getElementById('exportPhotoBackup').addEventListener('click', exportPhotoBackupZip);
 document.getElementById('logoutBtn').addEventListener('click', ()=>{
   showAppConfirm('로그아웃 할까요?', '로그아웃', async ()=>{ await window.fbLogout(); });
 });
