@@ -1924,9 +1924,17 @@ function openBarcodeCropRetry(dataUrl, onCode){
     };
     try{
       const code = await decodeBarcodeFromCrop(dataUrl, padded);
-      if(code){
+      // [버그수정] Quagga가 종이질감/인쇄선 등을 바코드로 잘못 읽어서 "21744068" 같은 의미없는
+      // 값을 내놓는 경우가 있었음(오탐). code가 있다고 무조건 성공 처리하지 말고, 실제 GS1
+      // 필드(GTIN/LOT/유효기간) 중 하나라도 뽑혔을 때만 진짜 성공으로 인정함.
+      const parsed = code ? parseGs1Raw(code) : null;
+      const valid = !!(parsed && (parsed.gtin || parsed.lot || parsed.expiryDate));
+      if(valid){
         closeOverlay('bcCropOverlay');
         onCode(code);
+      } else if(code){
+        statusEl.textContent = `⚠️ 뭔가 읽히긴 했는데(${code}) GS1 형식이 아니에요 - 오탐일 수 있어요. 바코드 막대만 더 딱 맞게 감싸서 다시 시도해보세요.`;
+        goBtn.disabled = false;
       } else {
         statusEl.textContent = '❌ 이 영역에서도 인식 못 했어요. 영역을 조금 더 넓게(또는 다르게) 다시 선택해보세요.';
         goBtn.disabled = false;
@@ -4922,6 +4930,10 @@ function openRecognitionTestModal(){
 
       const barcodeRaw = await decodeBarcodeFromImage(dataUrl);
       const gs1FromBarcode = barcodeRaw ? parseGs1Raw(barcodeRaw) : null;
+      // [버그수정] "뭔가 읽히기만 하면 성공"으로 처리했더니 Quagga가 종이질감·인쇄선 등을 바코드로
+      // 오인식한 가짜 값(예: "21744068")도 성공으로 떠버리는 문제가 있었음. GS1 필드(GTIN/LOT/유효기간)
+      // 중 하나도 못 뽑아냈으면 "읽긴 했지만 GS1 형식이 아님(오탐 가능성)"으로 취급 - 진짜 실패와 동일하게 처리
+      const barcodeGraphicOk = !!(gs1FromBarcode && (gs1FromBarcode.gtin || gs1FromBarcode.lot || gs1FromBarcode.expiryDate));
 
       progEl.querySelector('.ocr-progress').textContent = '🔄 텍스트 OCR 중... (몇 초 걸려요)';
       const ocrText = await runOcr(dataUrl);
@@ -4941,13 +4953,16 @@ function openRecognitionTestModal(){
       progEl.style.display = 'none';
       resEl.style.display = 'block';
       const cropRetryId = `rtCropRetryBtn_${Date.now()}`;
+      const barcodeBlockId = `rtBarcodeBlock_${Date.now()}`;
       resEl.innerHTML = `
         <div style="font-size:12.5px; font-weight:700; color:var(--steel-dark); margin:10px 0 6px;">① 바코드 그래픽 디코딩</div>
-        ${barcodeRaw
+        <div id="${barcodeBlockId}">
+        ${barcodeGraphicOk
           ? `<div class="memo">원시값: <code>${escapeHtml(barcodeRaw)}</code><br>GTIN: <b>${escapeHtml(gs1FromBarcode.gtin || '(없음)')}</b> · LOT: <b>${escapeHtml(gs1FromBarcode.lot || '(없음)')}</b> · 유효기간: <b>${escapeHtml(gs1FromBarcode.expiryDate || '(없음)')}</b></div>`
-          : `<div class="memo" style="color:var(--danger);">❌ 바코드 막대 인식 실패 - 여백을 두고 정면에서 다시 찍어보세요
+          : `<div class="memo" style="color:var(--danger);">❌ ${barcodeRaw ? `뭔가 읽긴 했는데 GS1 형식이 아니에요(오탐 가능성) · 원시값: <code>${escapeHtml(barcodeRaw)}</code>` : '바코드 막대 인식 실패'} - 여백을 두고 정면에서 다시 찍어보세요
               <button type="button" id="${cropRetryId}" style="display:block; width:100%; margin-top:8px; padding:8px; border-radius:7px; border:1px dashed var(--danger); background:#fff; color:var(--danger); font-weight:700; font-size:11.5px; cursor:pointer;">✂️ 바코드 부분만 잘라서 재시도</button>
             </div>`}
+        </div>
 
         <div style="font-size:12.5px; font-weight:700; color:var(--steel-dark); margin:10px 0 6px;">② 텍스트에서 (01)(10)(17) GS1코드 찾기</div>
         <div class="memo">GTIN: <b>${escapeHtml(gs1FromText.gtin || '(없음)')}</b> · LOT: <b>${escapeHtml(gs1FromText.lot || '(없음)')}</b> · 유효기간: <b>${escapeHtml(gs1FromText.expiryDate || '(없음)')}</b></div>
@@ -4961,15 +4976,17 @@ function openRecognitionTestModal(){
           <summary style="font-size:11.5px; color:var(--ink-muted); cursor:pointer; font-weight:600;">🔍 OCR 원문 전체 보기</summary>
           <pre style="white-space:pre-wrap; font-size:10.5px; color:var(--ink-muted); background:#F7F8FA; padding:10px; border-radius:8px; margin-top:6px; max-height:220px; overflow-y:auto; font-family:'JetBrains Mono',monospace;">${escapeHtml(ocrText || '(인식된 텍스트 없음)')}</pre>
         </details>`;
-      if(!barcodeRaw){
+      if(!barcodeGraphicOk){
         const cropBtn = document.getElementById(cropRetryId);
         if(cropBtn){
           cropBtn.addEventListener('click', ()=>{
             openBarcodeCropRetry(dataUrl, (croppedCode)=>{
               const gs1FromCrop = parseGs1Raw(croppedCode);
-              const barcodeBlock = resEl.querySelector('div');
+              // [버그수정] 이전엔 resEl.querySelector('div')로 찾아서 ①번 "제목" div를 잘못 바꿔치기했음
+              // (제목도 그냥 <div>라 첫번째로 걸림) → id로 정확한 내용 블록만 지정해서 교체
+              const barcodeBlock = document.getElementById(barcodeBlockId);
               if(barcodeBlock){
-                barcodeBlock.outerHTML = `<div class="memo" style="color:var(--green);">✅ 크롭 재인식 성공 · 원시값: <code>${escapeHtml(croppedCode)}</code><br>GTIN: <b>${escapeHtml(gs1FromCrop.gtin || '(없음)')}</b> · LOT: <b>${escapeHtml(gs1FromCrop.lot || '(없음)')}</b> · 유효기간: <b>${escapeHtml(gs1FromCrop.expiryDate || '(없음)')}</b></div>`;
+                barcodeBlock.innerHTML = `<div class="memo" style="color:var(--green);">✅ 크롭 재인식 성공 · 원시값: <code>${escapeHtml(croppedCode)}</code><br>GTIN: <b>${escapeHtml(gs1FromCrop.gtin || '(없음)')}</b> · LOT: <b>${escapeHtml(gs1FromCrop.lot || '(없음)')}</b> · 유효기간: <b>${escapeHtml(gs1FromCrop.expiryDate || '(없음)')}</b></div>`;
               }
               showToast('바코드 재인식 성공!');
             });
