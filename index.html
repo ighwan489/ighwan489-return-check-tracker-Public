@@ -635,6 +635,24 @@ function itemVerifiedQty(it){
 }
 function isExcelItem(it){ return it.expectedQuantity !== undefined && it.expectedQuantity !== null && it.expectedQuantity !== ''; }
 
+// 반품건 전체의 입고 진행상태를 판정. "실물없는 반품"으로 등록한 LOT(D상태·XXXXX)도 수량에는
+// 정상 포함되므로, 실물이 없어도 사유를 남기고 정식으로 수량을 채우면 입고완료로 인정됨.
+// 예정품목(엑셀등록)이 하나도 없는 건(예정외 등록만 있는 건)은 판정 대상이 아니라 null 반환.
+function recordReceivingLabel(rec){
+  const its = itemsOf(rec).filter(isExcelItem);
+  if(its.length === 0) return null;
+  let anyVerified = false, allComplete = true;
+  its.forEach(it => {
+    const v = itemVerifiedQty(it);
+    const e = parseFloat(it.expectedQuantity) || 0;
+    if(v > 0) anyVerified = true;
+    if(!(e > 0 && v >= e)) allComplete = false;
+  });
+  if(allComplete) return { label: '입고완료', color: 'var(--green)', bg: 'var(--green-bg)' };
+  if(anyVerified) return { label: '부분입고', color: 'var(--amber)', bg: 'var(--amber-bg)' };
+  return null;
+}
+
 function render(){
   document.getElementById('pendingCount').textContent = records.filter(r => r.status === 'pending').length;
   document.getElementById('inprogressCount').textContent = records.filter(r => r.status === 'inprogress').length;
@@ -657,6 +675,7 @@ function render(){
     const mismatchCount = its.reduce((sum, it) => sum + (Array.isArray(it.lots) ? it.lots.filter(l => l.codeMismatch).length : 0), 0);
     const mismatchCodes = [...new Set(its.flatMap(it => Array.isArray(it.lots) ? it.lots.filter(l => l.codeMismatch).map(l => l.codeMismatch.scannedCode) : []))];
     const blockBatchCount = its.reduce((sum, it) => sum + (Array.isArray(it.lots) ? it.lots.filter(l => l.blockBatch).length : 0), 0);
+    const recvInfo = recordReceivingLabel(r);
     return `
     <div class="card ${r.status}">
       <div class="card-inner">
@@ -664,7 +683,7 @@ function render(){
           <div style="display:flex; align-items:flex-start; min-width:0;">
             ${!isGuestMode ? `<input type="checkbox" class="card-select-chk" ${selectedIds.has(r.id) ? 'checked' : ''} onchange="toggleSelect('${r.id}', this.checked)">` : ''}
             <div style="min-width:0;">
-              <div class="lot">${escapeHtml(r.returnNumber || '(반품번호 미확인)')}</div>
+              <div class="lot">${escapeHtml(r.returnNumber || '(반품번호 미확인)')} ${recvInfo && r.status !== 'confirmed' ? `<span style="font-size:10px; font-weight:700; color:${recvInfo.color}; background:${recvInfo.bg}; padding:2px 7px; border-radius:8px; vertical-align:middle;">${recvInfo.label}</span>` : ''}</div>
               <div class="product">${escapeHtml(r.hospitalName || '병원명 미입력')} · 품목 ${its.length}건</div>
             </div>
           </div>
@@ -700,7 +719,7 @@ function render(){
           <button class="btn-sm btn-view btn-full-row" onclick="openDetail('${r.id}')">품목·사진 상세 보기</button>
           ${!isGuestMode && (r.status === 'expected' || r.status === 'pending' || r.status === 'inprogress') ? `<button class="btn-sm" style="background:var(--blue-bg); color:var(--blue); border:1px solid #C7D8FC;" onclick="openInspectModal('${r.id}')">🔍 ${r.status === 'inprogress' ? '검수 이어하기' : '실물검수'}</button>` : ''}
           ${!isGuestMode ? `<button class="btn-sm btn-edit" onclick="openEditRecordModal('${r.id}')">✏️ 정보 수정</button>` : ''}
-          ${(!isGuestMode && (r.status === 'pending' || r.status === 'inprogress')) ? `<button class="btn-sm btn-confirm" onclick="openConfirmModal('${r.id}')">검수완료 처리</button>` : ''}
+          ${(!isGuestMode && (r.status === 'pending' || r.status === 'inprogress') && recvInfo && recvInfo.label === '입고완료') ? `<button class="btn-sm btn-confirm" onclick="openConfirmModal('${r.id}')">✅ 검수완료 처리</button>` : ''}
           ${!isGuestMode ? `<button class="btn-sm btn-del" onclick="openDeleteConfirm('${r.id}')">삭제</button>` : ''}
         </div>
       </div>
@@ -3543,7 +3562,15 @@ async function openInspectModal(recordId){
   if(completeBtn){
     completeBtn.addEventListener('click', ()=>{
       const its = itemsOf(rec);
+      // [정책변경] 수량이 덜 찬 상태에서 "그래도 완료"로 우회하던 걸 없앰. 실물이 없는 품목은
+      // "📦 실물없음" 버튼으로 정식 등록(LOT=XXXXX·상태D·사유 남김)해야 수량이 채워짐 - 조용한 우회가 아니라
+      // 반드시 기록이 남는 방식으로만 완료 가능하게 함.
       const incomplete = its.filter(it => isExcelItem(it) && itemVerifiedQty(it) < (parseFloat(it.expectedQuantity)||0));
+      if(incomplete.length > 0){
+        const names = incomplete.map(it => it.productName || it.productCode).join(', ');
+        showToast(`아직 수량이 덜 채워진 품목이 있어요: ${names} (실물없음 버튼으로 사유를 남기고 채워주세요)`);
+        return;
+      }
       const mismatchLots = [];
       its.forEach(it => {
         if(isExcelItem(it) && Array.isArray(it.lots)){
@@ -3551,18 +3578,11 @@ async function openInspectModal(recordId){
         }
       });
       const proceedToConfirm = ()=>{ closeOverlay('inspectOverlay'); openConfirmModal(recordId); };
-      const proceedAfterIncompleteCheck = ()=>{
-        if(incomplete.length > 0){
-          showAppConfirm(`아직 예정수량만큼 확인 안 된 품목이 ${incomplete.length}건 있어요.\n그래도 검수완료 처리할까요?`, '그래도 완료', proceedToConfirm);
-        } else {
-          proceedToConfirm();
-        }
-      };
       if(mismatchLots.length > 0){
         const msg = mismatchLots.map(m => `- ${m.productName} · LOT ${m.lot}: ${m.mismatch.source}로 스캔된 코드(${m.mismatch.scannedCode})가 예정 코드(${m.mismatch.expectedCode})와 달라요`).join('\n');
-        showAppConfirm(`⚠️ 제품코드가 다르게 스캔된 LOT이 ${mismatchLots.length}건 있어요:\n${msg}\n\n그래도 이대로 검수완료 처리할까요?`, '그래도 완료', proceedAfterIncompleteCheck);
+        showAppConfirm(`⚠️ 제품코드가 다르게 스캔된 LOT이 ${mismatchLots.length}건 있어요:\n${msg}\n\n그래도 이대로 검수완료 처리할까요?`, '그래도 완료', proceedToConfirm);
       } else {
-        proceedAfterIncompleteCheck();
+        proceedToConfirm();
       }
     });
   }
@@ -3588,7 +3608,12 @@ function renderInspectItemsList(recordId){
             <div class="it-lot">${escapeHtml(it.productCode)}</div>
             <div class="it-meta">예정 ${expected}개 · 확인 ${verified}개${it.reason ? ' · ' + escapeHtml(it.reason) : ''}</div>
           </div>
-          ${!isGuestMode ? `<div class="it-actions"><button onclick="openEditExcelItemModal('${recordId}','${it.id}')">수정</button><button onclick="openAddLotModal('${recordId}','${it.id}')">+ LOT 추가</button>${it.isUnexpected ? `<button onclick="deleteUnexpectedItem('${recordId}','${it.id}')">삭제</button>` : ''}</div>` : ''}
+          ${!isGuestMode ? `<div class="it-actions" style="flex-wrap:wrap; row-gap:6px;">
+            <button onclick="openEditExcelItemModal('${recordId}','${it.id}')">수정</button>
+            <button onclick="openAddLotModal('${recordId}','${it.id}')" style="background:var(--steel); color:#fff; border-color:var(--steel); font-weight:700; font-size:12.5px; padding:7px 12px;">🔍 실물검수</button>
+            <button onclick="openNoPhysicalModal('${recordId}','${it.id}')" style="background:#fff; color:var(--danger); border-color:var(--danger); font-weight:600;">📦 실물없음</button>
+            ${it.isUnexpected ? `<button onclick="deleteUnexpectedItem('${recordId}','${it.id}')">삭제</button>` : ''}
+          </div>` : ''}
         </div>
         ${lots.length > 0 ? `<div style="margin-top:8px; display:flex; flex-direction:column; gap:6px;">
           ${lots.map(l => {
@@ -3598,6 +3623,7 @@ function renderInspectItemsList(recordId){
                 <span><b>${escapeHtml(l.lot)}</b> · ${escapeHtml(l.expiryDate||'-')} · ${escapeHtml(String(l.quantity))}개 <span style="font-size:9.5px; font-weight:700; color:#fff; background:${ITEM_STATUS_COLOR[st]||'var(--ink-muted)'}; padding:1px 6px; border-radius:8px;">${st}</span></span>
                 ${!isGuestMode ? `<button class="btn-sm btn-del" style="padding:3px 8px;" onclick="deleteLotFromItem('${recordId}','${it.id}','${l.id}')">삭제</button>` : ''}
               </div>
+              ${l.memo ? `<div style="font-size:11px; color:var(--ink-muted);">📝 ${escapeHtml(l.memo)}</div>` : ''}
               ${l.codeMismatch ? `<div style="font-size:11px; font-weight:700; color:var(--danger);">⚠️ ${escapeHtml(l.codeMismatch.source)}로 스캔된 코드(${escapeHtml(l.codeMismatch.scannedCode)})가 이 품목의 제품코드(${escapeHtml(l.codeMismatch.expectedCode)})와 달라요 - 실물을 다시 확인해주세요</div>` : ''}
               ${l.blockBatch ? `<div style="font-size:11px; font-weight:700; color:var(--steel-dark);">🚫 블락배치 LOT (상태 ${escapeHtml(l.blockBatch.status)})${l.blockBatch.memo ? ' · ' + escapeHtml(l.blockBatch.memo) : ''}</div>` : ''}
             </div>`;
@@ -4008,6 +4034,52 @@ async function openAddLotModal(recordId, itemId){
     }
     showToast(ok ? 'LOT이 추가됐어요' : '추가됐지만 저장에 일부 실패했어요');
     openInspectModal(recordId);
+  });
+}
+
+// ===================== 실물없는 반품 빠른 등록 (부족분 - 사유를 남기고 수량만 채움) ===================== //
+// LOT=XXXXX 고정, 유효기간 공란, 상태값 D(부적합) 고정, 비고 "실물없는 반품" 자동입력.
+// 사진 없이 수량만 입력하면 되도록 별도의 가벼운 모달로 분리함 (LOT 추가 모달과 다른 용도라 섞지 않음).
+async function openNoPhysicalModal(recordId, itemId){
+  closeOverlay('noPhysicalOverlay');
+  const rec = records.find(r => r.id === recordId);
+  if(!rec) return;
+  const its = itemsOf(rec);
+  const it = its.find(x => x.id === itemId);
+  if(!it) return;
+  const expected = parseFloat(it.expectedQuantity) || 0;
+  const verified = itemVerifiedQty(it);
+  const remaining = Math.max(0, expected - verified);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'noPhysicalOverlay';
+  overlay.innerHTML = `<div class="modal">
+    <h2>📦 실물없는 반품 등록</h2>
+    <div class="hint" style="margin-bottom:10px;"><b>${escapeHtml(it.productName || it.productCode)}</b> · 실물이 도착하지 않은 수량만큼 등록해요. LOT은 "XXXXX", 상태값은 D(부적합)로 자동 고정되고 비고에 사유가 남아요. 사진은 필요 없어요.</div>
+    <div class="field"><label>수량 *</label><input id="np_qty" type="text" autocomplete="off" placeholder="예: 5" value="${remaining > 0 ? remaining : ''}"></div>
+    <div class="field"><label>비고</label><input id="np_memo" type="text" autocomplete="off" value="실물없는 반품"></div>
+    <div class="err" id="np_err">수량을 입력해주세요</div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeOverlay('noPhysicalOverlay')">취소</button>
+      <button class="btn-submit" style="background:var(--danger);" id="np_saveBtn">등록</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('noPhysicalOverlay'); });
+
+  document.getElementById('np_saveBtn').addEventListener('click', async ()=>{
+    const qty = document.getElementById('np_qty').value.trim();
+    if(!qty || parseFloat(qty) <= 0){ document.getElementById('np_err').style.display = 'block'; return; }
+    const memo = document.getElementById('np_memo').value.trim() || '실물없는 반품';
+    const newLot = { id: genId(), lot: 'XXXXX', expiryDate: '', quantity: qty, status: 'D', memo };
+    if(!Array.isArray(it.lots)) it.lots = [];
+    it.lots.push(newLot);
+    rec.items = its;
+    render();
+    closeOverlay('noPhysicalOverlay');
+    const ok = await window.fbUpdateRecord(recordId, { items: its });
+    showToast(ok ? '실물없는 반품으로 등록됐어요' : '등록됐지만 저장에 일부 실패했어요');
+    if(document.getElementById('insp_itemsList')) renderInspectItemsList(recordId);
   });
 }
 
@@ -4668,28 +4740,28 @@ function exportToExcel(){
       '검수자': r.confirmedBy || '', '검수일시': r.confirmedAt ? fmtDate(r.confirmedAt) : '', '메모': r.memo || ''
     };
     if(its.length === 0){
-      rows.push({ ...base, '제품코드':'', '제품명':'', '예정수량':'', '제조번호':'', '유효기간':'', '수량':'', '품목상태값':'' });
+      rows.push({ ...base, '제품코드':'', '제품명':'', '예정수량':'', '제조번호':'', '유효기간':'', '수량':'', '품목상태값':'', 'LOT비고':'' });
     } else {
       its.forEach(it => {
         if(isExcelItem(it)){
           const lots = Array.isArray(it.lots) ? it.lots : [];
           if(lots.length === 0){
-            rows.push({ ...base, '제품코드': it.productCode||'', '제품명': it.productName||'', '예정수량': it.expectedQuantity||'', '제조번호':'(미확인)', '유효기간':'', '수량':'', '품목상태값':'' });
+            rows.push({ ...base, '제품코드': it.productCode||'', '제품명': it.productName||'', '예정수량': it.expectedQuantity||'', '제조번호':'(미확인)', '유효기간':'', '수량':'', '품목상태값':'', 'LOT비고':'' });
           } else {
             lots.forEach(l => {
               const st = l.status || 'A';
-              rows.push({ ...base, '제품코드': it.productCode||'', '제품명': it.productName||'', '예정수량': it.expectedQuantity||'', '제조번호': l.lot||'', '유효기간': l.expiryDate||'', '수량': l.quantity||'', '품목상태값': `${st} (${ITEM_STATUS_LABEL[st] || st})` });
+              rows.push({ ...base, '제품코드': it.productCode||'', '제품명': it.productName||'', '예정수량': it.expectedQuantity||'', '제조번호': l.lot||'', '유효기간': l.expiryDate||'', '수량': l.quantity||'', '품목상태값': `${st} (${ITEM_STATUS_LABEL[st] || st})`, 'LOT비고': l.memo || '' });
             });
           }
         } else {
           const st = it.status || 'A';
-          rows.push({ ...base, '제품코드': it.productCode||'', '제품명': it.productName||'', '예정수량':'', '제조번호': it.lot||'', '유효기간': it.expiryDate||'', '수량': it.quantity||'', '품목상태값': `${st} (${ITEM_STATUS_LABEL[st] || st})` });
+          rows.push({ ...base, '제품코드': it.productCode||'', '제품명': it.productName||'', '예정수량':'', '제조번호': it.lot||'', '유효기간': it.expiryDate||'', '수량': it.quantity||'', '품목상태값': `${st} (${ITEM_STATUS_LABEL[st] || st})`, 'LOT비고': it.memo || '' });
         }
       });
     }
   });
   const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = [{wch:14},{wch:10},{wch:20},{wch:14},{wch:10},{wch:16},{wch:10},{wch:16},{wch:24},{wch:22},{wch:10},{wch:14},{wch:12},{wch:8},{wch:16}];
+  ws['!cols'] = [{wch:14},{wch:10},{wch:20},{wch:14},{wch:10},{wch:16},{wch:10},{wch:16},{wch:24},{wch:22},{wch:10},{wch:14},{wch:12},{wch:8},{wch:16},{wch:18}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '반품검수기록');
   const now = new Date();
