@@ -1241,20 +1241,21 @@ async function openDetail(id){
   if(receiptGalleryInput) receiptGalleryInput.addEventListener('change', ()=>{ if(receiptGalleryInput.files.length) uploadReceiptFile(receiptGalleryInput.files[0]); });
 }
 
-async function deletePhotoFromDetail(recordId, photoId){
-  if(!confirm('이 사진을 삭제할까요? 삭제하면 되돌릴 수 없어요.')) return;
-  const ok = await window.fbDeletePhoto(photoId);
-  if(ok){
-    const rec = records.find(r => r.id === recordId);
-    if(rec && typeof rec.photoCount === 'number'){
-      rec.photoCount = Math.max(0, rec.photoCount - 1);
-      await window.fbUpdateRecord(recordId, { photoCount: rec.photoCount });
+function deletePhotoFromDetail(recordId, photoId){
+  showAppConfirm('이 사진을 삭제할까요? 삭제하면 되돌릴 수 없어요.', '삭제', async ()=>{
+    const ok = await window.fbDeletePhoto(photoId);
+    if(ok){
+      const rec = records.find(r => r.id === recordId);
+      if(rec && typeof rec.photoCount === 'number'){
+        rec.photoCount = Math.max(0, rec.photoCount - 1);
+        await window.fbUpdateRecord(recordId, { photoCount: rec.photoCount });
+      }
+      showToast('사진 삭제 완료');
+      openDetail(recordId);
+    } else {
+      showToast('삭제에 실패했어요');
     }
-    showToast('사진 삭제 완료');
-    openDetail(recordId);
-  } else {
-    showToast('삭제에 실패했어요');
-  }
+  });
 }
 
 // ===================== 저장된 품목 수정/삭제 - 검수완료 여부와 무관하게 언제든 가능 ===================== //
@@ -1328,25 +1329,26 @@ async function openEditItemModal(recordId, itemId, fromEditRecordModal){
   });
 }
 
-async function deleteItemFromRecord(recordId, itemId, fromEditRecordModal){
-  if(!confirm('이 품목을 삭제할까요? 첨부된 실물사진도 같이 삭제되고, 되돌릴 수 없어요.')) return;
-  const rec = records.find(r => r.id === recordId);
-  if(!rec) return;
-  const its = itemsOf(rec).filter(x => x.id !== itemId);
-  rec.items = its;
-  render();
-  const ok = await window.fbUpdateRecord(recordId, { items: its });
-  // 그 품목에 달려있던 실물사진들도 정리
-  const photos = await window.fbGetPhotos(recordId);
-  const orphanPhotos = photos.filter(p => p.itemId === itemId);
-  for(const p of orphanPhotos){ await window.fbDeletePhoto(p.id); }
-  if(orphanPhotos.length > 0 && typeof rec.photoCount === 'number'){
-    rec.photoCount = Math.max(0, rec.photoCount - orphanPhotos.length);
-    await window.fbUpdateRecord(recordId, { photoCount: rec.photoCount });
-  }
-  showToast(ok ? '품목 삭제 완료' : '삭제됐지만 저장에 일부 실패했어요');
-  if(fromEditRecordModal){ renderEditRecordItemsList(recordId); }
-  else { openDetail(recordId); }
+function deleteItemFromRecord(recordId, itemId, fromEditRecordModal){
+  showAppConfirm('이 품목을 삭제할까요? 첨부된 실물사진도 같이 삭제되고, 되돌릴 수 없어요.', '삭제', async ()=>{
+    const rec = records.find(r => r.id === recordId);
+    if(!rec) return;
+    const its = itemsOf(rec).filter(x => x.id !== itemId);
+    rec.items = its;
+    render();
+    const ok = await window.fbUpdateRecord(recordId, { items: its });
+    // 그 품목에 달려있던 실물사진들도 정리
+    const photos = await window.fbGetPhotos(recordId);
+    const orphanPhotos = photos.filter(p => p.itemId === itemId);
+    for(const p of orphanPhotos){ await window.fbDeletePhoto(p.id); }
+    if(orphanPhotos.length > 0 && typeof rec.photoCount === 'number'){
+      rec.photoCount = Math.max(0, rec.photoCount - orphanPhotos.length);
+      await window.fbUpdateRecord(recordId, { photoCount: rec.photoCount });
+    }
+    showToast(ok ? '품목 삭제 완료' : '삭제됐지만 저장에 일부 실패했어요');
+    if(fromEditRecordModal){ renderEditRecordItemsList(recordId); }
+    else { openDetail(recordId); }
+  });
 }
 
 // ===================== OCR / 이미지 유틸 ===================== //
@@ -1691,13 +1693,13 @@ function rotateAndResizeDataUrl(dataUrl, angleDeg, maxSize){
   });
 }
 
-function quaggaDecodeOnce(src){
+function quaggaDecodeOnce(src, quaggaSize){
   return new Promise((resolve)=>{
     try{
       Quagga.decodeSingle({
         decoder: { readers: ['code_128_reader', 'ean_reader', 'ean_8_reader', 'code_39_reader', 'upc_reader'] },
         locate: true,
-        inputStream: { size: 900 },
+        inputStream: { size: quaggaSize || 900 },
         src
       }, function(result){
         resolve(result && result.codeResult && result.codeResult.code ? result.codeResult.code : null);
@@ -1706,17 +1708,234 @@ function quaggaDecodeOnce(src){
   });
 }
 
+// 흑백 변환 + 히스토그램 스트레칭(대비 강화). 조명이 흐리거나 반사광이 있는 라벨 사진에서
+// 바코드 흑/백 경계가 흐릿하게 찍힌 경우 이 전처리를 거치면 디코딩 성공률이 올라감.
+function enhanceContrastDataUrl(dataUrl, maxSize){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.onload = ()=>{
+      let w = img.width, h = img.height;
+      const scale = Math.min(1, maxSize / Math.max(w, h));
+      w = Math.round(w * scale); h = Math.round(h * scale);
+      const pad = Math.round(Math.max(w, h) * 0.08) + 24;
+      const canvas = document.createElement('canvas');
+      canvas.width = w + pad * 2; canvas.height = h + pad * 2;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, pad, pad, w, h);
+      try{
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const d = imgData.data;
+        let min = 255, max = 0;
+        for(let i = 0; i < d.length; i += 4){
+          const gray = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+          if(gray < min) min = gray;
+          if(gray > max) max = gray;
+        }
+        const range = Math.max(1, max - min);
+        for(let i = 0; i < d.length; i += 4){
+          const gray = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+          const stretched = Math.max(0, Math.min(255, ((gray - min) / range) * 255));
+          d[i] = d[i+1] = d[i+2] = stretched;
+        }
+        ctx.putImageData(imgData, 0, 0);
+      }catch(e){ console.warn('대비 보정 실패, 원본으로 진행:', e); }
+      resolve(canvas.toDataURL('image/jpeg', 0.92));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+// 기존엔 1000px 고정 크기 × 4방향만 시도했음(총 4회). 바코드가 사진에 너무 작게(멀리서 촬영) 또는
+// 너무 크게(가까이서 촬영) 찍힌 경우 실패가 잦았음 → 크기를 3단계로 늘리고, 그래도 실패하면
+// 대비보정(흐림/반사광 대응) 버전까지 순차 시도. 가장 흔한 케이스(정방향, 표준크기)를 맨 먼저 시도해서
+// 대부분의 경우엔 기존과 동일한 속도로 끝나고, 실패할 때만 추가 시도로 넘어감.
 async function decodeBarcodeFromImage(dataUrl){
   if(!window.Quagga) return null;
-  const angles = [0, 90, 270, 180];
-  for(const angle of angles){
+  const attempts = [
+    { angle: 0, size: 1000 },
+    { angle: 90, size: 1000 },
+    { angle: 270, size: 1000 },
+    { angle: 180, size: 1000 },
+    { angle: 0, size: 1400 },   // 바코드가 작게(멀리서) 찍힌 경우
+    { angle: 90, size: 1400 },
+    { angle: 0, size: 700 },    // 바코드가 크게(가까이서, 흔들림) 찍힌 경우
+  ];
+  for(const a of attempts){
     try{
-      const src = angle === 0 ? await rotateAndResizeDataUrl(dataUrl, 0, 1000) : await rotateAndResizeDataUrl(dataUrl, angle, 1000);
+      const src = await rotateAndResizeDataUrl(dataUrl, a.angle, a.size);
       const code = await quaggaDecodeOnce(src);
       if(code) return code;
-    }catch(e){ console.warn(`바코드 ${angle}도 시도 실패:`, e); }
+    }catch(e){ console.warn(`바코드 ${a.angle}도/${a.size}px 시도 실패:`, e); }
   }
+  // 여기까지 다 실패했으면 흐림/저조도/반사광 가능성 → 대비 보정 버전으로 재시도
+  try{
+    const enhanced = await enhanceContrastDataUrl(dataUrl, 1000);
+    const code = await quaggaDecodeOnce(enhanced);
+    if(code) return code;
+    const enhanced90 = await rotateAndResizeDataUrl(enhanced, 90, 1200);
+    const code90 = await quaggaDecodeOnce(enhanced90);
+    if(code90) return code90;
+  }catch(e){ console.warn('대비 보정 디코딩 시도 실패:', e); }
   return null;
+}
+
+// 사진의 특정 영역(crop)만 잘라서 디코딩 - 배경 노이즈(라벨 글자, 다른 무늬)가 없어지므로
+// 인식 실패했던 사진도 바코드 부분만 정확히 잘라주면 성공률이 크게 올라감.
+// cropRect은 원본 이미지 기준 0~1 비율 좌표 {x,y,w,h}
+function cropDataUrl(dataUrl, cropRect){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.onload = ()=>{
+      const sx = Math.round(cropRect.x * img.width);
+      const sy = Math.round(cropRect.y * img.height);
+      const sw = Math.round(cropRect.w * img.width);
+      const sh = Math.round(cropRect.h * img.height);
+      const canvas = document.createElement('canvas');
+      canvas.width = sw; canvas.height = sh;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      resolve(canvas.toDataURL('image/jpeg', 0.95));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+async function decodeBarcodeFromCrop(dataUrl, cropRect){
+  const cropped = await cropDataUrl(dataUrl, cropRect);
+  return decodeBarcodeFromImage(cropped);
+}
+
+// 바코드 그래픽 디코딩 결과(GS1 원시값)를 LOT추가 모달의 필드(LOT/유효기간/제품코드 대조)에 반영.
+// 최초 촬영 시 자동실행과, 아래 크롭 재시도 버튼을 눌렀을 때 둘 다 이 함수를 공용으로 사용함.
+async function applyBarcodeGraphicResult(barcodeRaw, it, myGen){
+  const out = { found: [], failed: !barcodeRaw, gs1: null };
+  if(!barcodeRaw) return out;
+  const gs1Result = parseGs1Raw(barcodeRaw);
+  out.gs1 = gs1Result;
+  if(!gs1Result.lot && !gs1Result.expiryDate && !gs1Result.gtin){
+    out.failed = true;
+    return out;
+  }
+  const lotElBc = document.getElementById('al_lot');
+  const expElBc = document.getElementById('al_expiryDate');
+  if(gs1Result.lot && lotElBc && (!lotElBc.value.trim() || lotFieldAutoFilled)){
+    lotElBc.value = gs1Result.lot;
+    lotFieldAutoFilled = true;
+    out.found.push(`LOT(바코드스캔) ${gs1Result.lot}`);
+    await checkBlockBatchForLot(it.productCode, gs1Result.lot);
+  }
+  if(gs1Result.expiryDate && expElBc && (!expElBc.value.trim() || expFieldAutoFilled)){
+    expElBc.value = gs1Result.expiryDate;
+    expFieldAutoFilled = true;
+    out.found.push(`유효기간(바코드스캔) ${gs1Result.expiryDate}`);
+  }
+  if(gs1Result.gtin){
+    const masterHit = await window.fbGetProductMaster(gs1Result.gtin.slice(-6));
+    if(lotDraftGen !== myGen) return out;
+    if(masterHit && masterHit.productCode){
+      const bcMatch = compareCodeMatch(masterHit.productCode, it.productCode, 6);
+      if(bcMatch === 'match'){
+        out.found.push('바코드 제품코드 일치 확인');
+      } else if(bcMatch === 'ambiguous'){
+        out.found.push(`🔎 바코드 매핑 코드(${masterHit.productCode}) 뒷자리만 겹쳐요 - 아래 제품코드 검색으로 확인해주세요`);
+      } else {
+        out.found.push(`⚠️ 바코드 매핑 제품코드(${masterHit.productCode})가 예정 제품코드와 달라요`);
+        lotDraftMismatch = { scannedCode: masterHit.productCode, expectedCode: it.productCode, source: '바코드' };
+      }
+    }
+  }
+  return out;
+}
+
+// 인식 실패한 사진에서 바코드가 있는 부분만 손가락으로 잘라 다시 시도할 수 있는 모달.
+// 배경(라벨 글자·다른 무늬)이 없어지므로 자동 다중시도로도 안 되던 사진이 성공하는 경우가 많음.
+function openBarcodeCropRetry(dataUrl, onCode){
+  closeOverlay('bcCropOverlay');
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay'; overlay.id = 'bcCropOverlay';
+  overlay.innerHTML = `<div class="modal" style="padding-top:16px;">
+    <h2>✂️ 바코드 영역 선택</h2>
+    <div class="hint" style="margin-bottom:10px;">바코드 막대가 있는 부분만 손가락으로 드래그해서 네모로 감싸주세요. 배경 글자·무늬가 빠질수록 인식이 잘돼요.</div>
+    <div id="bcCropStage" style="position:relative; width:100%; max-height:58vh; overflow:hidden; border-radius:10px; border:1px solid var(--line); background:#111; touch-action:none;">
+      <img id="bcCropImg" src="${dataUrl}" style="display:block; width:100%; height:auto; user-select:none; pointer-events:none;">
+      <div id="bcCropBox" style="position:absolute; border:2px solid var(--amber); background:rgba(180,83,10,0.18); display:none; pointer-events:none;"></div>
+    </div>
+    <div id="bcCropStatus" class="hint" style="margin-top:8px; display:none;"></div>
+    <div class="modal-actions" style="margin-top:12px;">
+      <button class="btn-cancel" id="bcCropCancel">취소</button>
+      <button class="btn-submit" id="bcCropGo" disabled>이 영역으로 재시도</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay('bcCropOverlay'); });
+  document.getElementById('bcCropCancel').addEventListener('click', ()=> closeOverlay('bcCropOverlay'));
+
+  const stage = document.getElementById('bcCropStage');
+  const box = document.getElementById('bcCropBox');
+  const goBtn = document.getElementById('bcCropGo');
+  let startX = 0, startY = 0, dragging = false, rect = null;
+
+  function pointFromEvent(e){
+    const r = stage.getBoundingClientRect();
+    const x = Math.min(Math.max(e.clientX - r.left, 0), r.width);
+    const y = Math.min(Math.max(e.clientY - r.top, 0), r.height);
+    return { x, y, w: r.width, h: r.height };
+  }
+
+  stage.addEventListener('pointerdown', (e)=>{
+    const p = pointFromEvent(e);
+    startX = p.x; startY = p.y; dragging = true;
+    box.style.display = 'block';
+    box.style.left = startX + 'px'; box.style.top = startY + 'px';
+    box.style.width = '0px'; box.style.height = '0px';
+    try{ stage.setPointerCapture(e.pointerId); }catch(err){}
+  });
+  stage.addEventListener('pointermove', (e)=>{
+    if(!dragging) return;
+    const p = pointFromEvent(e);
+    const x = Math.min(p.x, startX), y = Math.min(p.y, startY);
+    const w = Math.abs(p.x - startX), h = Math.abs(p.y - startY);
+    box.style.left = x + 'px'; box.style.top = y + 'px';
+    box.style.width = w + 'px'; box.style.height = h + 'px';
+    rect = { x: x / p.w, y: y / p.h, w: w / p.w, h: h / p.h };
+    goBtn.disabled = !(w > 24 && h > 24);
+  });
+  const endDrag = ()=>{ dragging = false; };
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
+
+  goBtn.addEventListener('click', async ()=>{
+    if(!rect) return;
+    const statusEl = document.getElementById('bcCropStatus');
+    statusEl.style.display = 'block';
+    statusEl.textContent = '🔄 잘라낸 영역에서 바코드 인식 중...';
+    goBtn.disabled = true;
+    // 선택 영역 가장자리에 여백을 살짝 더 줘서 바코드 끝부분이 잘리지 않게 보정
+    const pad = 0.03;
+    const padded = {
+      x: Math.max(0, rect.x - pad), y: Math.max(0, rect.y - pad),
+      w: Math.min(1 - Math.max(0, rect.x - pad), rect.w + pad * 2),
+      h: Math.min(1 - Math.max(0, rect.y - pad), rect.h + pad * 2)
+    };
+    try{
+      const code = await decodeBarcodeFromCrop(dataUrl, padded);
+      if(code){
+        closeOverlay('bcCropOverlay');
+        onCode(code);
+      } else {
+        statusEl.textContent = '❌ 이 영역에서도 인식 못 했어요. 영역을 조금 더 넓게(또는 다르게) 다시 선택해보세요.';
+        goBtn.disabled = false;
+      }
+    }catch(err){
+      console.error('크롭 재인식 실패:', err);
+      statusEl.textContent = '❌ 인식 중 오류가 났어요. 다시 시도해주세요.';
+      goBtn.disabled = false;
+    }
+  });
 }
 
 // 바코드에서 나온 원시 GS1 문자열(괄호 없이 AI코드+값이 붙어있는 형태)에서 GTIN/LOT/유효기간을 뽑아냄
@@ -2327,16 +2546,17 @@ function openQuickAddBarcode(productCode, productName){
   });
 }
 
-async function quickDeleteBarcodeFromCatalog(key){
-  if(!confirm(`바코드 끝 ${key} 매핑을 삭제할까요?`)) return;
-  const ok = await window.fbDeleteProductMaster(key);
-  showToast(ok ? '삭제됐어요' : '삭제에 실패했어요');
-  if(ok){
-    const list = await window.fbListProductMaster();
-    productMasterCrossCache = list;
-    masterListCache = list;
-    renderCatalogList(document.getElementById('pc_search') ? document.getElementById('pc_search').value : '');
-  }
+function quickDeleteBarcodeFromCatalog(key){
+  showAppConfirm(`바코드 끝 ${key} 매핑을 삭제할까요?`, '삭제', async ()=>{
+    const ok = await window.fbDeleteProductMaster(key);
+    showToast(ok ? '삭제됐어요' : '삭제에 실패했어요');
+    if(ok){
+      const list = await window.fbListProductMaster();
+      productMasterCrossCache = list;
+      masterListCache = list;
+      renderCatalogList(document.getElementById('pc_search') ? document.getElementById('pc_search').value : '');
+    }
+  });
 }
 
 function editCatalogEntry(code, name){
@@ -2345,11 +2565,12 @@ function editCatalogEntry(code, name){
   document.getElementById('pc_name').value = name;
 }
 
-async function deleteCatalogEntry(code){
-  if(!confirm(`제품 "${code}"를 삭제할까요?`)) return;
-  const ok = await window.fbDeleteCatalogItem(code);
-  showToast(ok ? '삭제됐어요' : '삭제에 실패했어요');
-  loadCatalogList();
+function deleteCatalogEntry(code){
+  showAppConfirm(`제품 "${code}"를 삭제할까요?`, '삭제', async ()=>{
+    const ok = await window.fbDeleteCatalogItem(code);
+    showToast(ok ? '삭제됐어요' : '삭제에 실패했어요');
+    loadCatalogList();
+  });
 }
 
 // ===================== 마스터 공용 엑셀 내보내기 헬퍼 ===================== //
@@ -2573,11 +2794,12 @@ function editMasterEntry(key, code, name, unit){
   if(unitEl) unitEl.value = unit || '';
 }
 
-async function deleteMasterEntry(key){
-  if(!confirm(`바코드 끝 ${key} 매핑을 삭제할까요?`)) return;
-  const ok = await window.fbDeleteProductMaster(key);
-  showToast(ok ? '삭제됐어요' : '삭제에 실패했어요');
-  loadMasterList();
+function deleteMasterEntry(key){
+  showAppConfirm(`바코드 끝 ${key} 매핑을 삭제할까요?`, '삭제', async ()=>{
+    const ok = await window.fbDeleteProductMaster(key);
+    showToast(ok ? '삭제됐어요' : '삭제에 실패했어요');
+    loadMasterList();
+  });
 }
 
 // ===================== 파트너 마스터 관리 (거래처 코드 ↔ 이름, 개별/일괄 등록) ===================== //
@@ -2753,11 +2975,12 @@ function editPartnerEntry(code, name){
   document.getElementById('pm_name').value = name;
 }
 
-async function deletePartnerEntry(code){
-  if(!confirm(`파트너 "${code}"를 삭제할까요?`)) return;
-  const ok = await window.fbDeletePartnerMaster(code);
-  showToast(ok ? '삭제됐어요' : '삭제에 실패했어요');
-  loadPartnerList();
+function deletePartnerEntry(code){
+  showAppConfirm(`파트너 "${code}"를 삭제할까요?`, '삭제', async ()=>{
+    const ok = await window.fbDeletePartnerMaster(code);
+    showToast(ok ? '삭제됐어요' : '삭제에 실패했어요');
+    loadPartnerList();
+  });
 }
 
 // ===================== 반품 예정 엑셀 일괄등록 ===================== //
@@ -3469,26 +3692,27 @@ async function deleteUnexpectedItem(recordId, itemId){
   );
 }
 
-async function deleteLotFromItem(recordId, itemId, lotId){
-  if(!confirm('이 LOT을 삭제할까요? 첨부사진도 같이 삭제되고 되돌릴 수 없어요.')) return;
-  const rec = records.find(r => r.id === recordId);
-  if(!rec) return;
-  const its = itemsOf(rec);
-  const it = its.find(x => x.id === itemId);
-  if(!it || !Array.isArray(it.lots)) return;
-  it.lots = it.lots.filter(l => l.id !== lotId);
-  rec.items = its;
-  render();
-  const ok = await window.fbUpdateRecord(recordId, { items: its });
-  const photos = await window.fbGetPhotos(recordId);
-  const orphan = photos.filter(p => p.lotId === lotId);
-  for(const p of orphan){ await window.fbDeletePhoto(p.id); }
-  if(orphan.length > 0 && typeof rec.photoCount === 'number'){
-    rec.photoCount = Math.max(0, rec.photoCount - orphan.length);
-    await window.fbUpdateRecord(recordId, { photoCount: rec.photoCount });
-  }
-  showToast(ok ? 'LOT 삭제 완료' : '삭제됐지만 일부 실패했어요');
-  openInspectModal(recordId);
+function deleteLotFromItem(recordId, itemId, lotId){
+  showAppConfirm('이 LOT을 삭제할까요? 첨부사진도 같이 삭제되고 되돌릴 수 없어요.', '삭제', async ()=>{
+    const rec = records.find(r => r.id === recordId);
+    if(!rec) return;
+    const its = itemsOf(rec);
+    const it = its.find(x => x.id === itemId);
+    if(!it || !Array.isArray(it.lots)) return;
+    it.lots = it.lots.filter(l => l.id !== lotId);
+    rec.items = its;
+    render();
+    const ok = await window.fbUpdateRecord(recordId, { items: its });
+    const photos = await window.fbGetPhotos(recordId);
+    const orphan = photos.filter(p => p.lotId === lotId);
+    for(const p of orphan){ await window.fbDeletePhoto(p.id); }
+    if(orphan.length > 0 && typeof rec.photoCount === 'number'){
+      rec.photoCount = Math.max(0, rec.photoCount - orphan.length);
+      await window.fbUpdateRecord(recordId, { photoCount: rec.photoCount });
+    }
+    showToast(ok ? 'LOT 삭제 완료' : '삭제됐지만 일부 실패했어요');
+    openInspectModal(recordId);
+  });
 }
 
 let lotDraftGen = 0;
@@ -3628,45 +3852,10 @@ async function openAddLotModal(recordId, itemId){
       // 실제 바코드 그래픽 디코딩 시도 (텍스트 OCR보다 훨씬 정확함 - 성공하면 최우선 적용)
       const barcodeRaw = await decodeBarcodeFromImage(dataUrl);
       if(lotDraftGen !== myGen) return;
-      const barcodeDecodeFailedInit = !barcodeRaw;
-      let barcodeDecodeFailed = barcodeDecodeFailedInit;
-      let barcodeFound = [];
-      let gs1Result = null;
-      if(barcodeRaw){
-        gs1Result = parseGs1Raw(barcodeRaw);
-        if(!gs1Result.lot && !gs1Result.expiryDate && !gs1Result.gtin){
-          // 바코드 그래픽은 뭔가 읽었지만 파싱 결과가 전부 비었다면(디코딩이 깨진 경우) 사실상 실패로 취급
-          barcodeDecodeFailed = true;
-        }
-        const lotElBc = document.getElementById('al_lot');
-        const expElBc = document.getElementById('al_expiryDate');
-        if(gs1Result.lot && lotElBc && (!lotElBc.value.trim() || lotFieldAutoFilled)){
-          lotElBc.value = gs1Result.lot;
-          lotFieldAutoFilled = true;
-          barcodeFound.push(`LOT(바코드스캔) ${gs1Result.lot}`);
-          await checkBlockBatchForLot(it.productCode, gs1Result.lot);
-        }
-        if(gs1Result.expiryDate && expElBc && (!expElBc.value.trim() || expFieldAutoFilled)){
-          expElBc.value = gs1Result.expiryDate;
-          expFieldAutoFilled = true;
-          barcodeFound.push(`유효기간(바코드스캔) ${gs1Result.expiryDate}`);
-        }
-        if(gs1Result.gtin){
-          const masterHit = await window.fbGetProductMaster(gs1Result.gtin.slice(-6));
-          if(lotDraftGen !== myGen) return;
-          if(masterHit && masterHit.productCode){
-            const bcMatch = compareCodeMatch(masterHit.productCode, it.productCode, 6);
-            if(bcMatch === 'match'){
-              barcodeFound.push('바코드 제품코드 일치 확인');
-            } else if(bcMatch === 'ambiguous'){
-              barcodeFound.push(`🔎 바코드 매핑 코드(${masterHit.productCode}) 뒷자리만 겹쳐요 - 아래 제품코드 검색으로 확인해주세요`);
-            } else {
-              barcodeFound.push(`⚠️ 바코드 매핑 제품코드(${masterHit.productCode})가 예정 제품코드와 달라요`);
-              lotDraftMismatch = { scannedCode: masterHit.productCode, expectedCode: it.productCode, source: '바코드' };
-            }
-          }
-        }
-      }
+      const bcApply = await applyBarcodeGraphicResult(barcodeRaw, it, myGen);
+      if(lotDraftGen !== myGen) return;
+      let barcodeDecodeFailed = bcApply.failed;
+      let barcodeFound = bcApply.found;
 
       const combined = lotDraftPhotos.map(p=>p.rawText).join('\n');
       let found = [...barcodeFound];
@@ -3734,8 +3923,12 @@ async function openAddLotModal(recordId, itemId){
       if(resultEl){
         resultEl.style.display = 'block';
         const debugHtml = `<details style="margin-top:8px;"><summary style="font-size:11.5px; color:var(--ink-muted); cursor:pointer; font-weight:600;">🔍 OCR 원문 보기 (디버그용)</summary><pre style="white-space:pre-wrap; font-size:10.5px; color:var(--ink-muted); background:#F7F8FA; padding:10px; border-radius:8px; margin-top:6px; max-height:180px; overflow-y:auto; font-family:'JetBrains Mono',monospace;">${escapeHtml(combined||'(없음)')}</pre></details>`;
+        const cropRetryBtnId = `bcCropRetryBtn_${pidx}_${myGen}`;
         const barcodeFailNote = barcodeDecodeFailed
-          ? `<div style="font-size:11.5px; font-weight:600; color:var(--amber); background:var(--amber-bg); padding:7px 10px; border-radius:8px; margin-top:6px;">📷 바코드 막대 인식은 실패했어요 (텍스트 인식으로만 채워졌어요) - 바코드 주변에 여백을 두고 정면에서 다시 찍으면 인식률이 올라가요</div>`
+          ? `<div style="font-size:11.5px; font-weight:600; color:var(--amber); background:var(--amber-bg); padding:7px 10px; border-radius:8px; margin-top:6px;">
+              📷 바코드 막대 인식은 실패했어요 (텍스트 인식으로만 채워졌어요) - 바코드 주변에 여백을 두고 정면에서 다시 찍으면 인식률이 올라가요
+              <button type="button" id="${cropRetryBtnId}" style="display:block; width:100%; margin-top:7px; padding:8px; border-radius:7px; border:1px dashed var(--amber); background:#fff; color:var(--amber); font-weight:700; font-size:11.5px; cursor:pointer;">✂️ 바코드 부분만 잘라서 재시도</button>
+            </div>`
           : '';
         if(ambiguousCodeInfo){
           resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--amber); background:var(--amber-bg); padding:8px 10px; border-radius:8px;">🔎 코드 뒷자리만 인식됐어요(${escapeHtml(ambiguousCodeInfo.scannedCode)}) - 위 "제품코드 확인" 검색창에서 실제 코드를 찾아 선택해주세요</div>${barcodeFailNote}${debugHtml}`;
@@ -3750,6 +3943,25 @@ async function openAddLotModal(recordId, itemId){
           resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--green); background:var(--green-bg); padding:8px 10px; border-radius:8px;">✅ ${escapeHtml(found.join(' · '))}</div>${barcodeFailNote}${debugHtml}`;
         } else {
           resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--ink-muted); background:#F1F3F5; padding:8px 10px; border-radius:8px;">인식된 정보가 없어요 - 직접 입력해주세요</div>${barcodeFailNote}${debugHtml}`;
+        }
+        if(barcodeDecodeFailed){
+          const cropBtn = document.getElementById(cropRetryBtnId);
+          if(cropBtn){
+            cropBtn.addEventListener('click', ()=>{
+              openBarcodeCropRetry(dataUrl, async (croppedCode)=>{
+                if(lotDraftGen !== myGen) return;
+                const retryApply = await applyBarcodeGraphicResult(croppedCode, it, myGen);
+                if(lotDraftGen !== myGen) return;
+                if(!retryApply.failed && retryApply.found.length > 0){
+                  showToast('바코드 재인식 성공!');
+                  const debugHtmlNow = resultEl.querySelector('details') ? resultEl.querySelector('details').outerHTML : '';
+                  resultEl.innerHTML = `<div style="font-size:12.5px; font-weight:600; color:var(--green); background:var(--green-bg); padding:8px 10px; border-radius:8px;">✅ ${escapeHtml(retryApply.found.join(' · '))} (잘라서 재인식)</div>${debugHtmlNow}`;
+                } else {
+                  showToast('바코드는 읽었지만 값을 못 뽑아냈어요');
+                }
+              });
+            });
+          }
         }
       }
       srcInput.value = '';
